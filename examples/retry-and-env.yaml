@@ -1,0 +1,37 @@
+version: 1
+
+defaults:
+  shell: sh
+  timeout_sec: 20
+  max_retries: 2
+  working_dir: .
+
+hooks:
+  - id: audit.command.payload
+    description: Persist each hook payload with merged common/platform environment variables.
+    event: before_command
+    matcher: ".*"
+    command: |
+      mkdir -p .hook_bridge
+      cat > ".hook_bridge/${AUDIT_FILE}"
+      printf '%s\n' "platform=$HOOK_BRIDGE_PLATFORM" >> ".hook_bridge/${AUDIT_FILE}"
+      printf '%s\n' "rule=$HOOK_BRIDGE_RULE_ID" >> ".hook_bridge/${AUDIT_FILE}"
+      printf '%s\n' "tag=$AUDIT_TAG" >> ".hook_bridge/${AUDIT_FILE}"
+    env:
+      AUDIT_FILE: command-payload.jsonl
+      AUDIT_TAG: common
+    platforms:
+      claude:
+        env:
+          AUDIT_TAG: claude
+      codex:
+        env:
+          AUDIT_TAG: codex
+
+  - id: retry.flaky.after_command
+    description: Demonstrate per-rule retry override for flaky post-command checks.
+    event: after_command
+    matcher: ".*"
+    command: |
+      test -f .hook_bridge/retry-ready
+    max_retries: 1

@@ -1,0 +1,41 @@
+version: 1
+
+defaults:
+  shell: sh
+  timeout_sec: 15
+
+hooks:
+  - id: guard.shell.commands
+    description: Block risky shell commands and return native platform-specific messages.
+    event: before_command
+    matcher: "^(rm|git\\s+reset|git\\s+checkout\\s+--)"
+    command: |
+      echo "dangerous command rejected"
+      exit 1
+    platforms:
+      claude:
+        decision: block
+        reason: "Dangerous shell command rejected by hook_bridge."
+      codex:
+        continue: false
+        stopReason: "Dangerous shell command rejected by hook_bridge."
+        systemMessage: "Use a non-destructive command or ask for explicit approval."
+
+  - id: claude.only.session.banner
+    description: Emit a Claude-only session banner.
+    event: session_start
+    command: |
+      printf '%s\n' "Claude session started" >> .hook_bridge.claude.log
+    platforms:
+      codex:
+        enabled: false
+
+  - id: codex.only.after.summary
+    description: Emit a Codex-only completion marker.
+    event: after_command
+    matcher: ".*"
+    command: |
+      printf '%s\n' "Codex command finished" >> .hook_bridge.codex.log
+    platforms:
+      claude:
+        enabled: false

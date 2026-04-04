@@ -1,0 +1,27 @@
+version: 1
+
+defaults:
+  shell: sh
+  timeout_sec: 10
+  max_retries: 0
+
+hooks:
+  - id: log.before_command
+    description: Log every tool invocation before execution.
+    event: before_command
+    matcher: ".*"
+    command: |
+      printf '%s\n' "[before_command] $HOOK_BRIDGE_RULE_ID" >> .hook_bridge.log
+
+  - id: log.after_command
+    description: Log every tool invocation after execution.
+    event: after_command
+    matcher: ".*"
+    command: |
+      printf '%s\n' "[after_command] $HOOK_BRIDGE_RULE_ID" >> .hook_bridge.log
+
+  - id: log.session_start
+    description: Record new agent sessions.
+    event: session_start
+    command: |
+      printf '%s\n' "[session_start] $HOOK_BRIDGE_RULE_ID" >> .hook_bridge.log
