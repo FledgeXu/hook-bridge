@@ -4,3 +4,27 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+
+[lints.clippy]
+correctness = "deny"
+suspicious = "deny"
+complexity = "deny"
+perf = "deny"
+style = "deny"
+pedantic = "deny"
+cargo = "deny"
+
+# restriction
+dbg_macro = "deny"
+todo = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+use_debug = "deny"
+allow_attributes_without_reason = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic_in_result_fn = "deny"
+multiple_unsafe_ops_per_block = "deny"
+missing_assert_message = "deny"
+indexing_slicing = "deny"
+panic = "deny"
