@@ -310,18 +310,23 @@ fn translate_output(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::cell::RefCell;
+    use std::env;
+    use std::path::{Path, PathBuf};
 
     use crate::cli::RunArgs;
     use crate::platform::Platform;
 
     use crate::runtime::Runtime;
     use crate::runtime::clock::{Clock, FixedClock};
-    use crate::runtime::fs::{FakeFileSystem, FileSystem};
+    use crate::runtime::fs::{FakeFileSystem, FileSystem, OsFileSystem};
     use crate::runtime::io::{FakeIo, Io};
     use crate::runtime::process::{FakeProcessRunner, ProcessRunner};
 
-    use super::{RuntimeContext, parse_runtime_context, retry_state_path};
+    use super::{
+        RetryState, RuntimeContext, execute, load_retry_state, now_epoch_sec,
+        parse_runtime_context, persist_retry_state, retry_state_path, translate_output,
+    };
 
     struct TestRuntime {
         fs: FakeFileSystem,
@@ -353,6 +358,75 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct CapturingIo {
+        stdin: Vec<u8>,
+        stdout: RefCell<Vec<u8>>,
+    }
+
+    impl Io for CapturingIo {
+        fn read_stdin(&self) -> Result<Vec<u8>, crate::error::HookBridgeError> {
+            Ok(self.stdin.clone())
+        }
+
+        fn write_stdout(&self, bytes: &[u8]) -> Result<(), crate::error::HookBridgeError> {
+            self.stdout.borrow_mut().extend_from_slice(bytes);
+            Ok(())
+        }
+
+        fn write_stderr(&self, _bytes: &[u8]) -> Result<(), crate::error::HookBridgeError> {
+            Ok(())
+        }
+    }
+
+    struct ExecuteRuntime {
+        fs: OsFileSystem,
+        clock: FixedClock,
+        process: FakeProcessRunner,
+        io: CapturingIo,
+        tmp: PathBuf,
+    }
+
+    impl Runtime for ExecuteRuntime {
+        fn fs(&self) -> &dyn FileSystem {
+            &self.fs
+        }
+
+        fn clock(&self) -> &dyn Clock {
+            &self.clock
+        }
+
+        fn process_runner(&self) -> &dyn ProcessRunner {
+            &self.process
+        }
+
+        fn io(&self) -> &dyn Io {
+            &self.io
+        }
+
+        fn temp_dir(&self) -> PathBuf {
+            self.tmp.clone()
+        }
+    }
+
+    struct CurrentDirGuard {
+        original: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn enter(path: &Path) -> std::io::Result<Self> {
+            let original = env::current_dir()?;
+            env::set_current_dir(path)?;
+            Ok(Self { original })
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            let _ = env::set_current_dir(&self.original);
+        }
+    }
+
     #[test]
     fn parse_context_works_for_codex_shape() {
         let args = RunArgs {
@@ -360,13 +434,17 @@ mod tests {
             rule_id: "r1".to_string(),
         };
         let payload = r#"{"hook_event_name":"before_command","thread_id":"t1","cwd":"/tmp"}"#;
-        let context_result = parse_runtime_context(&args, payload, Path::new("/tmp/cfg.yaml"));
-        assert!(context_result.is_ok(), "payload should parse");
-        let Ok(context) = context_result else {
-            return;
-        };
-        assert_eq!(context.event, "before_command");
-        assert_eq!(context.session_or_thread_id, "t1");
+        let context = parse_runtime_context(&args, payload, Path::new("/tmp/cfg.yaml"));
+        assert_eq!(
+            context.as_ref().map(|value| value.event.as_str()),
+            Ok("before_command")
+        );
+        assert_eq!(
+            context
+                .as_ref()
+                .map(|value| value.session_or_thread_id.as_str()),
+            Ok("t1")
+        );
     }
 
     #[test]
@@ -428,5 +506,386 @@ mod tests {
         let path_b = retry_state_path(&runtime, &context_b);
 
         assert_ne!(path_a, path_b);
+    }
+
+    #[test]
+    fn parse_context_rejects_invalid_json() {
+        let args = RunArgs {
+            platform: Platform::Codex,
+            rule_id: "r1".to_string(),
+        };
+
+        assert!(matches!(
+            parse_runtime_context(&args, "{", Path::new("/tmp/cfg.yaml")),
+            Err(crate::error::HookBridgeError::JsonParse { message })
+                if message.contains("invalid runtime JSON input")
+        ));
+    }
+
+    #[test]
+    fn test_runtime_exposes_all_dependencies() {
+        let runtime = TestRuntime {
+            fs: FakeFileSystem::default(),
+            clock: FixedClock::new(std::time::SystemTime::UNIX_EPOCH),
+            process: FakeProcessRunner::success(0),
+            io: FakeIo::default(),
+            tmp: "/tmp/run-tests".into(),
+        };
+
+        assert!(matches!(runtime.fs().exists(Path::new(".")), Ok(false)));
+        assert_eq!(runtime.clock().now(), std::time::SystemTime::UNIX_EPOCH);
+        assert_eq!(runtime.io().read_stdin(), Ok(Vec::new()));
+        assert_eq!(runtime.temp_dir(), PathBuf::from("/tmp/run-tests"));
+        assert!(matches!(
+            runtime.process_runner().run(&crate::runtime::process::ProcessRequest {
+                program: "echo".to_string(),
+                args: vec!["ok".to_string()],
+                stdin: Vec::new(),
+                timeout: std::time::Duration::from_secs(1),
+                cwd: None,
+                env: std::collections::BTreeMap::new(),
+            }),
+            Ok(output) if output.status_code == 0
+        ));
+    }
+
+    fn write_managed_hooks_file(root: &Path, source_config: &str) {
+        let create_result = std::fs::create_dir_all(root.join(".codex"));
+        assert!(create_result.is_ok(), "codex dir should be creatable");
+        let write_result = std::fs::write(
+            root.join(".codex/hooks.json"),
+            serde_json::json!({
+                "_hook_bridge": {
+                    "managed_by": "hook_bridge",
+                    "managed_version": 1,
+                    "source_config": source_config,
+                }
+            })
+            .to_string(),
+        );
+        assert!(
+            write_result.is_ok(),
+            "managed hooks fixture should be writable"
+        );
+    }
+
+    fn write_config(root: &Path) -> PathBuf {
+        let config = root.join("hook-bridge.yaml");
+        let write_result = std::fs::write(
+            &config,
+            r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+    max_retries: 1
+",
+        );
+        assert!(write_result.is_ok(), "config file should be writable");
+        config
+    }
+
+    #[test]
+    fn execute_rejects_relative_managed_source_config() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
+        write_managed_hooks_file(temp.path(), "hook-bridge.yaml");
+        let runtime = ExecuteRuntime {
+            fs: OsFileSystem,
+            clock: FixedClock::new(std::time::SystemTime::UNIX_EPOCH),
+            process: FakeProcessRunner::success(0),
+            io: CapturingIo::default(),
+            tmp: temp.path().to_path_buf(),
+        };
+
+        assert_eq!(
+            execute(
+                &RunArgs {
+                    platform: Platform::Codex,
+                    rule_id: "r1".to_string(),
+                },
+                &runtime,
+            ),
+            Err(crate::error::HookBridgeError::ConfigValidation {
+                message: "managed source_config must be absolute, got 'hook-bridge.yaml'"
+                    .to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn execute_rejects_non_utf8_stdin() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
+        let config_path = write_config(temp.path());
+        write_managed_hooks_file(temp.path(), &config_path.display().to_string());
+        let runtime = ExecuteRuntime {
+            fs: OsFileSystem,
+            clock: FixedClock::new(std::time::SystemTime::UNIX_EPOCH),
+            process: FakeProcessRunner::success(0),
+            io: CapturingIo {
+                stdin: vec![0xff],
+                stdout: RefCell::new(Vec::new()),
+            },
+            tmp: temp.path().to_path_buf(),
+        };
+
+        assert!(matches!(
+            execute(
+                &RunArgs {
+                    platform: Platform::Codex,
+                    rule_id: "r1".to_string(),
+                },
+                &runtime,
+            ),
+            Err(crate::error::HookBridgeError::JsonParse { message })
+                if message.contains("stdin payload is not valid UTF-8 JSON")
+        ));
+    }
+
+    #[test]
+    fn execute_rejects_event_mismatch() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
+        let config_path = write_config(temp.path());
+        write_managed_hooks_file(temp.path(), &config_path.display().to_string());
+        let runtime = ExecuteRuntime {
+            fs: OsFileSystem,
+            clock: FixedClock::new(std::time::SystemTime::UNIX_EPOCH),
+            process: FakeProcessRunner::success(0),
+            io: CapturingIo {
+                stdin: br#"{"event":"after_command","thread_id":"t1"}"#.to_vec(),
+                stdout: RefCell::new(Vec::new()),
+            },
+            tmp: temp.path().to_path_buf(),
+        };
+
+        assert_eq!(
+            execute(
+                &RunArgs {
+                    platform: Platform::Codex,
+                    rule_id: "r1".to_string(),
+                },
+                &runtime,
+            ),
+            Err(crate::error::HookBridgeError::PlatformProtocol {
+                message: "event mismatch for rule 'r1': stdin event 'after_command' but configured event 'before_command'".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn execute_short_circuits_when_retry_guard_is_engaged() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
+        let config_path = write_config(temp.path());
+        write_managed_hooks_file(temp.path(), &config_path.display().to_string());
+        let runtime = ExecuteRuntime {
+            fs: OsFileSystem,
+            clock: FixedClock::new(std::time::UNIX_EPOCH + std::time::Duration::from_secs(10)),
+            process: FakeProcessRunner::success(0),
+            io: CapturingIo {
+                stdin: br#"{"event":"before_command","thread_id":"t1"}"#.to_vec(),
+                stdout: RefCell::new(Vec::new()),
+            },
+            tmp: temp.path().to_path_buf(),
+        };
+        let context = RuntimeContext {
+            platform: Platform::Codex,
+            event: "before_command".to_string(),
+            rule_id: "r1".to_string(),
+            source_config_path: config_path.clone(),
+            session_or_thread_id: "t1".to_string(),
+            cwd: None,
+            transcript_path: None,
+            raw_payload: "{}".to_string(),
+        };
+        let state_path = retry_state_path(&runtime, &context);
+        assert_eq!(
+            persist_retry_state(
+                &runtime,
+                &state_path,
+                &RetryState {
+                    consecutive_failures: 1,
+                    last_error: "boom".to_string(),
+                    last_failure_epoch_sec: 9,
+                },
+            ),
+            Ok(())
+        );
+
+        assert_eq!(
+            execute(
+                &RunArgs {
+                    platform: Platform::Codex,
+                    rule_id: "r1".to_string(),
+                },
+                &runtime,
+            ),
+            Ok(())
+        );
+        assert!(
+            String::from_utf8(runtime.io.stdout.borrow().clone())
+                .is_ok_and(|payload| payload.contains("max retries reached")),
+            "retry guard should write protocol output"
+        );
+    }
+
+    #[test]
+    fn execute_runtime_exposes_all_dependencies() {
+        let runtime = ExecuteRuntime {
+            fs: OsFileSystem,
+            clock: FixedClock::new(std::time::UNIX_EPOCH),
+            process: FakeProcessRunner::success(0),
+            io: CapturingIo::default(),
+            tmp: "/tmp/exec-tests".into(),
+        };
+
+        assert!(matches!(
+            runtime.fs().exists(Path::new("/definitely/missing")),
+            Ok(false)
+        ));
+        assert_eq!(runtime.clock().now(), std::time::UNIX_EPOCH);
+        assert_eq!(
+            runtime
+                .process_runner()
+                .run(&crate::runtime::process::ProcessRequest {
+                    program: "echo".to_string(),
+                    args: vec!["ok".to_string()],
+                    stdin: Vec::new(),
+                    timeout: std::time::Duration::from_secs(1),
+                    cwd: None,
+                    env: std::collections::BTreeMap::new(),
+                }),
+            Ok(crate::runtime::process::ProcessOutput {
+                status_code: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        );
+        assert_eq!(runtime.io().read_stdin(), Ok(Vec::new()));
+        assert_eq!(runtime.temp_dir(), PathBuf::from("/tmp/exec-tests"));
+    }
+
+    #[test]
+    fn helper_functions_cover_error_and_output_paths() {
+        let retry_path = PathBuf::from("/tmp/retry.json");
+        let runtime = TestRuntime {
+            fs: FakeFileSystem::with_existing(vec![retry_path.clone()]),
+            clock: FixedClock::new(std::time::UNIX_EPOCH - std::time::Duration::from_secs(1)),
+            process: FakeProcessRunner::success(0),
+            io: FakeIo::default(),
+            tmp: "/tmp/custom".into(),
+        };
+        let context = RuntimeContext {
+            platform: Platform::Codex,
+            event: "before_command".to_string(),
+            rule_id: "r1".to_string(),
+            source_config_path: "/tmp/cfg.yaml".into(),
+            session_or_thread_id: "t1".to_string(),
+            cwd: None,
+            transcript_path: None,
+            raw_payload: "{}".to_string(),
+        };
+
+        assert!(matches!(
+            now_epoch_sec(&runtime),
+            Err(crate::error::HookBridgeError::Process { message })
+                if message.contains("clock error")
+        ));
+        assert!(matches!(
+            load_retry_state(&runtime, retry_path.as_path()),
+            Err(crate::error::HookBridgeError::JsonParse { message })
+                if message.contains("invalid retry state JSON")
+        ));
+        assert_eq!(
+            translate_output(
+                Platform::Codex,
+                &context,
+                &super::ExecutionResult {
+                    status: super::InternalStatus::Error,
+                    message: Some("boom".to_string()),
+                    system_message: Some("bridge failed".to_string()),
+                    exit_code: Some(1),
+                    raw_stdout: Vec::new(),
+                    raw_stderr: Vec::new(),
+                },
+            )
+            .map(|output| {
+                let payload_result = String::from_utf8(output.stdout);
+                assert!(
+                    payload_result.is_ok(),
+                    "protocol output should be valid utf-8"
+                );
+                let Ok(payload) = payload_result else {
+                    return serde_json::Value::Null;
+                };
+                let value_result = serde_json::from_str::<serde_json::Value>(payload.trim_end());
+                assert!(value_result.is_ok(), "protocol output should be valid json");
+                let Ok(value) = value_result else {
+                    return serde_json::Value::Null;
+                };
+                value
+            }),
+            Ok(serde_json::json!({
+                "event": "before_command",
+                "continue": false,
+                "stopReason": "boom",
+                "systemMessage": "bridge failed",
+            }))
+        );
     }
 }

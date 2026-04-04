@@ -178,9 +178,11 @@ fn unique_tmp_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
 
-    use super::{FakeFileSystem, FileSystem};
+    use super::{FakeFileSystem, FileSystem, OsFileSystem, atomic_write};
+    use crate::error::HookBridgeError;
 
     #[test]
     fn fake_filesystem_can_simulate_existence_checks() {
@@ -190,5 +192,116 @@ mod tests {
         let exists_result = fs.exists(&path);
 
         assert!(matches!(exists_result, Ok(true)));
+    }
+
+    #[test]
+    fn fake_filesystem_noop_operations_succeed() {
+        let fs = FakeFileSystem::default();
+        let path = PathBuf::from("/tmp/mock");
+
+        assert_eq!(fs.write_all(&path, b"ok"), Ok(()));
+        assert_eq!(fs.create_dir_all(&path), Ok(()));
+        assert_eq!(fs.rename(&path, &path), Ok(()));
+        assert_eq!(fs.remove_file_if_exists(&path), Ok(()));
+    }
+
+    #[test]
+    fn os_filesystem_round_trips_file_operations() {
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let fs = OsFileSystem;
+        let dir = temp.path().join("nested");
+        let original = dir.join("one.txt");
+        let renamed = dir.join("two.txt");
+
+        assert_eq!(fs.exists(&original), Ok(false));
+        assert_eq!(fs.create_dir_all(&dir), Ok(()));
+        assert_eq!(fs.write_all(&original, b"hello"), Ok(()));
+        assert_eq!(fs.exists(&original), Ok(true));
+        assert_eq!(fs.read_to_string(&original), Ok("hello".to_string()));
+        assert_eq!(fs.rename(&original, &renamed), Ok(()));
+        assert_eq!(fs.read_to_string(&renamed), Ok("hello".to_string()));
+        assert_eq!(fs.remove_file_if_exists(&renamed), Ok(()));
+        assert_eq!(fs.exists(&renamed), Ok(false));
+    }
+
+    #[test]
+    fn atomic_write_persists_content() {
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let fs = OsFileSystem;
+        let path = temp.path().join("hooks.json");
+
+        assert_eq!(atomic_write(&fs, &path, br#"{"ok":true}"#), Ok(()));
+        assert_eq!(fs.read_to_string(&path), Ok(r#"{"ok":true}"#.to_string()));
+    }
+
+    #[test]
+    fn atomic_write_rejects_path_without_parent() {
+        assert_eq!(
+            atomic_write(&FakeFileSystem::default(), std::path::Path::new("/"), b"{}"),
+            Err(HookBridgeError::ConfigValidation {
+                message: "path '/' has no parent directory".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn os_filesystem_surfaces_io_errors() {
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let fs = OsFileSystem;
+        let missing = temp.path().join("missing.txt");
+        let invalid_parent = missing.join("child.txt");
+
+        assert!(matches!(
+            fs.read_to_string(&missing),
+            Err(HookBridgeError::Io {
+                operation: "read_to_string",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fs.write_all(&invalid_parent, b"nope"),
+            Err(HookBridgeError::Io {
+                operation: "write",
+                ..
+            })
+        ));
+        assert_eq!(fs.remove_file_if_exists(&missing), Ok(()));
+
+        let blocked_dir = temp.path().join("blocked");
+        let write_blocked_dir = fs::write(&blocked_dir, b"file");
+        assert!(write_blocked_dir.is_ok(), "fixture file should be writable");
+        assert!(matches!(
+            fs.create_dir_all(&blocked_dir.join("child")),
+            Err(HookBridgeError::Io {
+                operation: "create_dir_all",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fs.exists(&blocked_dir.join("child")),
+            Err(HookBridgeError::Io {
+                operation: "exists",
+                ..
+            })
+        ));
+        assert!(matches!(
+            fs.rename(&missing, &blocked_dir.join("renamed.txt")),
+            Err(HookBridgeError::Io {
+                operation: "rename",
+                ..
+            })
+        ));
     }
 }

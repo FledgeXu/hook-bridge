@@ -58,6 +58,8 @@ pub fn translate_output(_context: &RuntimeContext, result: &ExecutionResult) -> 
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use crate::platform::Platform;
     use crate::run::{ExecutionResult, InternalStatus, RuntimeContext};
 
@@ -72,13 +74,52 @@ mod tests {
         });
 
         let parsed = parse_context_fields(&payload);
-        assert!(parsed.is_ok(), "payload should parse");
-        let Ok((event, session, cwd, _)) = parsed else {
-            return;
-        };
-        assert_eq!(event, "before_command");
-        assert_eq!(session, "s1");
-        assert_eq!(cwd, Some(std::path::PathBuf::from("/tmp")));
+
+        assert_eq!(
+            parsed,
+            Ok((
+                "before_command".to_string(),
+                "s1".to_string(),
+                Some(PathBuf::from("/tmp")),
+                None,
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_fallback_event_and_thread_fields() {
+        let payload = serde_json::json!({
+            "event": "after_command",
+            "thread_id": "t1",
+            "transcript_path": "/tmp/transcript.json",
+        });
+
+        assert_eq!(
+            parse_context_fields(&payload),
+            Ok((
+                "after_command".to_string(),
+                "t1".to_string(),
+                None,
+                Some(PathBuf::from("/tmp/transcript.json")),
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_missing_required_fields() {
+        assert_eq!(
+            parse_context_fields(&serde_json::json!({ "session_id": "s1" })),
+            Err(crate::error::HookBridgeError::PlatformProtocol {
+                message: "claude payload missing required field 'hook_event_name'".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_context_fields(&serde_json::json!({ "hook_event_name": "before_command" })),
+            Err(crate::error::HookBridgeError::PlatformProtocol {
+                message: "claude payload missing required field 'session_id' or 'thread_id'"
+                    .to_string(),
+            })
+        );
     }
 
     #[test]
@@ -105,6 +146,37 @@ mod tests {
         assert!(
             out.get("decision").is_none(),
             "success path should omit decision"
+        );
+    }
+
+    #[test]
+    fn failure_output_blocks_with_messages() {
+        let context = RuntimeContext {
+            platform: Platform::Claude,
+            event: "before_command".to_string(),
+            rule_id: "r1".to_string(),
+            source_config_path: "/tmp/cfg.yaml".into(),
+            session_or_thread_id: "s1".to_string(),
+            cwd: None,
+            transcript_path: None,
+            raw_payload: "{}".to_string(),
+        };
+        let result = ExecutionResult {
+            status: InternalStatus::Block,
+            message: Some("denied".to_string()),
+            system_message: Some("bridge blocked".to_string()),
+            exit_code: Some(1),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+        };
+
+        assert_eq!(
+            translate_output(&context, &result),
+            serde_json::json!({
+                "decision": "block",
+                "message": "denied",
+                "systemMessage": "bridge blocked",
+            })
         );
     }
 }

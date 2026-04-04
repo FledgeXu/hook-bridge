@@ -166,16 +166,17 @@ pub fn allowed_decisions(platform: Platform, event: &str) -> &'static [DecisionK
 mod tests {
     use crate::platform::Platform;
 
-    use super::{DecisionKind, allowed_decisions, event_capability, timeout_field_name};
+    use super::{
+        DecisionKind, allowed_decisions, allowed_extra_fields, event_capability,
+        event_supports_matcher, events, supports_event, timeout_field_name,
+    };
 
     #[test]
     fn returns_event_capability_for_known_event() {
-        let cap = event_capability(Platform::Codex, "before_command");
-        assert!(cap.is_some(), "event capability should exist");
-        let Some(value) = cap else {
-            return;
-        };
-        assert!(value.supports_matcher);
+        assert_eq!(
+            event_capability(Platform::Codex, "before_command").map(|value| value.supports_matcher),
+            Some(true)
+        );
     }
 
     #[test]
@@ -190,5 +191,19 @@ mod tests {
         assert!(
             !allowed_decisions(Platform::Codex, "before_command").contains(&DecisionKind::Block)
         );
+    }
+
+    #[test]
+    fn exposes_events_matcher_support_and_extra_fields() {
+        assert_eq!(
+            events(Platform::Claude),
+            &["before_command", "after_command", "session_start"]
+        );
+        assert!(supports_event(Platform::Claude, "session_start"));
+        assert!(!supports_event(Platform::Claude, "unknown"));
+        assert!(event_supports_matcher(Platform::Claude, "before_command"));
+        assert!(!event_supports_matcher(Platform::Claude, "session_start"));
+        assert!(allowed_extra_fields(Platform::Codex, "before_command").contains("stopReason"));
+        assert!(allowed_extra_fields(Platform::Codex, "unknown").is_empty());
     }
 }

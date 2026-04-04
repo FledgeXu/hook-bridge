@@ -14,6 +14,9 @@ use cli::Cli;
 use error::{ExitCodeKind, HookBridgeError, exit_code_for_error};
 use runtime::RealRuntime;
 
+#[cfg(test)]
+pub(crate) static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// Runs the top-level CLI application flow.
 ///
 /// # Errors

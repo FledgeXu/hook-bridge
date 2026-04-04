@@ -426,23 +426,20 @@ mod tests {
 
     use super::parse_and_normalize;
     use crate::error::HookBridgeError;
+    use crate::platform::Platform;
 
     fn assert_validation_error_contains(yaml: &str, needle: &str) {
-        let result = parse_and_normalize("cfg.yaml".into(), yaml);
-        assert!(result.is_err(), "config should be rejected");
-        let Err(error) = result else {
-            return;
-        };
+        let message = parse_and_normalize("cfg.yaml".into(), yaml)
+            .err()
+            .and_then(|error| match error {
+                HookBridgeError::ConfigValidation { message } => Some(message),
+                _ => None,
+            });
         assert!(
-            matches!(error, HookBridgeError::ConfigValidation { .. }),
-            "expected ConfigValidation error variant"
-        );
-        let HookBridgeError::ConfigValidation { message } = error else {
-            return;
-        };
-        assert!(
-            message.contains(needle),
-            "error message should contain '{needle}', got: {message}"
+            message
+                .as_deref()
+                .is_some_and(|message| message.contains(needle)),
+            "config validation message should contain '{needle}'"
         );
     }
 
@@ -488,6 +485,16 @@ hooks:
     }
 
     #[test]
+    fn rejects_empty_hook_list() {
+        let yaml = r"
+version: 1
+hooks: []
+";
+
+        assert_validation_error_contains(yaml, "field 'hooks' must not be empty");
+    }
+
+    #[test]
     fn rejects_invalid_event_name() {
         let yaml = r"
 version: 1
@@ -498,6 +505,32 @@ hooks:
 ";
 
         assert_validation_error_contains(yaml, "field 'event' value 'not_a_real_event'");
+    }
+
+    #[test]
+    fn rejects_invalid_rule_id() {
+        let yaml = r"
+version: 1
+hooks:
+  - id: bad id
+    event: before_command
+    command: echo one
+";
+
+        assert_validation_error_contains(yaml, "has invalid id");
+    }
+
+    #[test]
+    fn rejects_empty_rule_id() {
+        let yaml = r"
+version: 1
+hooks:
+  - id: '   '
+    event: before_command
+    command: echo one
+";
+
+        assert_validation_error_contains(yaml, "field 'id' must not be empty");
     }
 
     #[test]
@@ -553,7 +586,6 @@ hooks:
         let Ok(config) = config_result else {
             return;
         };
-
         let maybe_rule = config.hooks.iter().find(|hook| hook.id == "r1");
         assert!(maybe_rule.is_some(), "rule must exist");
         let Some(rule) = maybe_rule else {
@@ -599,13 +631,11 @@ hooks:
         let Ok(config) = config_result else {
             return;
         };
-
         let maybe_rule = config.hooks.iter().find(|hook| hook.id == "r1");
         assert!(maybe_rule.is_some(), "rule must exist");
         let Some(rule) = maybe_rule else {
             return;
         };
-
         let codex = rule.codex.as_ref();
         assert!(codex.is_some(), "codex mapping must exist");
         let Some(codex_rule) = codex else {
@@ -648,7 +678,6 @@ hooks:
         let Ok(config) = config_result else {
             return;
         };
-
         let maybe_rule = config.hooks.iter().find(|hook| hook.id == "r1");
         assert!(maybe_rule.is_some(), "rule must exist");
         let Some(rule) = maybe_rule else {
@@ -711,13 +740,11 @@ hooks:
         let Ok(config) = config_result else {
             return;
         };
-
         let rule1 = config.hooks.iter().find(|hook| hook.id == "r1");
         assert!(rule1.is_some(), "r1 must exist");
         let Some(rule1_value) = rule1 else {
             return;
         };
-
         let rule1_claude = rule1_value.claude.as_ref();
         assert!(rule1_claude.is_some(), "r1 claude should exist");
         let Some(rule1_claude_value) = rule1_claude else {
@@ -751,6 +778,119 @@ hooks:
                 .as_ref()
                 .and_then(|value| value.working_dir.as_ref()),
             Some(&PathBuf::from("/base"))
+        );
+    }
+
+    #[test]
+    fn find_platform_rule_reports_missing_cases() {
+        let yaml = r"
+version: 1
+hooks:
+  - id: only_claude
+    event: before_command
+    command: echo ok
+    platforms:
+      codex:
+        enabled: false
+";
+        let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+        assert!(config_result.is_ok(), "config should parse");
+        let Ok(config) = config_result else {
+            return;
+        };
+
+        assert_eq!(
+            config.find_platform_rule(Platform::Codex, "only_claude"),
+            Err(HookBridgeError::ConfigValidation {
+                message: "rule 'only_claude' has no codex mapping".to_string(),
+            })
+        );
+        let codex_only_result = parse_and_normalize(
+            "cfg.yaml".into(),
+            r"
+version: 1
+hooks:
+  - id: only_codex
+    event: before_command
+    command: echo ok
+    platforms:
+      claude:
+        enabled: false
+",
+        );
+        assert!(codex_only_result.is_ok(), "config should parse");
+        let Ok(codex_only) = codex_only_result else {
+            return;
+        };
+        assert_eq!(
+            codex_only.find_platform_rule(Platform::Claude, "only_codex"),
+            Err(HookBridgeError::ConfigValidation {
+                message: "rule 'only_codex' has no claude mapping".to_string(),
+            })
+        );
+        assert_eq!(
+            config.find_platform_rule(Platform::Claude, "missing"),
+            Err(HookBridgeError::ConfigValidation {
+                message: "rule 'missing' does not exist in config".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_extra_and_invalid_platform_specific_fields() {
+        let unknown = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    mystery: true
+";
+        let no_platforms = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    platforms:
+      claude:
+        enabled: false
+      codex:
+        enabled: false
+";
+        let empty_shell = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    shell: '   '
+";
+        let empty_command = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: '   '
+";
+        let invalid_platform_field = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    platforms:
+      codex:
+        decision: stop
+";
+
+        assert_validation_error_contains(unknown, "is not recognized in hook schema");
+        assert_validation_error_contains(no_platforms, "does not map to any platform");
+        assert_validation_error_contains(empty_shell, "field 'shell' must not be empty");
+        assert_validation_error_contains(empty_command, "field 'command' must not be empty");
+        assert_validation_error_contains(
+            invalid_platform_field,
+            "field 'platforms.codex.decision' is not supported for event 'before_command'",
         );
     }
 }

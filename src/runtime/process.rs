@@ -191,9 +191,14 @@ impl ProcessRunner for FakeProcessRunner {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::io;
     use std::time::Duration;
 
-    use super::{FakeProcessRunner, ProcessRequest, ProcessRunner};
+    use super::{
+        FakeProcessRunner, ProcessRequest, ProcessRunner, SystemProcessRunner, collect_pipe_reader,
+        spawn_pipe_reader,
+    };
+    use crate::error::HookBridgeError;
 
     #[test]
     fn fake_process_runner_returns_injected_result() {
@@ -210,5 +215,149 @@ mod tests {
         let result = runner.run(&request);
 
         assert!(matches!(result, Ok(output) if output.status_code == 0));
+    }
+
+    #[test]
+    fn system_runner_captures_stdout_stderr_and_exit_code() {
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let runner = SystemProcessRunner;
+        let request = ProcessRequest {
+            program: "sh".to_string(),
+            args: vec![
+                "-lc".to_string(),
+                "printf out; printf err 1>&2; exit 7".to_string(),
+            ],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(1),
+            cwd: Some(temp.path().to_path_buf()),
+            env: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            runner.run(&request),
+            Ok(super::ProcessOutput {
+                status_code: 7,
+                stdout: b"out".to_vec(),
+                stderr: b"err".to_vec(),
+            })
+        );
+    }
+
+    #[test]
+    fn system_runner_passes_cwd_env_and_stdin() {
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let runner = SystemProcessRunner;
+        let cwd_result = temp.path().canonicalize();
+        assert!(cwd_result.is_ok(), "canonical path should resolve");
+        let Ok(cwd) = cwd_result else {
+            return;
+        };
+        let mut env = BTreeMap::new();
+        env.insert("HOOK_BRIDGE_TEST".to_string(), "set".to_string());
+        let request = ProcessRequest {
+            program: "sh".to_string(),
+            args: vec![
+                "-lc".to_string(),
+                "printf '%s|%s' \"$PWD\" \"$HOOK_BRIDGE_TEST\"; cat 1>&2".to_string(),
+            ],
+            stdin: b"stdin-payload".to_vec(),
+            timeout: Duration::from_secs(1),
+            cwd: Some(temp.path().to_path_buf()),
+            env,
+        };
+
+        let output = runner.run(&request);
+
+        assert_eq!(
+            output,
+            Ok(super::ProcessOutput {
+                status_code: 0,
+                stdout: format!("{}|set", cwd.display()).into_bytes(),
+                stderr: b"stdin-payload".to_vec(),
+            })
+        );
+    }
+
+    #[test]
+    fn system_runner_reports_spawn_failure() {
+        let runner = SystemProcessRunner;
+        let request = ProcessRequest {
+            program: "command_that_does_not_exist_123".to_string(),
+            args: Vec::new(),
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(1),
+            cwd: None,
+            env: BTreeMap::new(),
+        };
+
+        assert!(matches!(
+            runner.run(&request),
+            Err(HookBridgeError::Process { message })
+                if message.contains("failed to spawn process")
+        ));
+    }
+
+    #[test]
+    fn system_runner_reports_timeout() {
+        let runner = SystemProcessRunner;
+        let request = ProcessRequest {
+            program: "sh".to_string(),
+            args: vec!["-lc".to_string(), "sleep 2".to_string()],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(1),
+            cwd: None,
+            env: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            runner.run(&request),
+            Err(HookBridgeError::Timeout { timeout_sec: 1 })
+        );
+    }
+
+    #[test]
+    fn collect_pipe_reader_returns_empty_for_missing_handle() {
+        assert_eq!(collect_pipe_reader(None, "stdout"), Ok(Vec::new()));
+    }
+
+    struct BrokenReader;
+
+    impl io::Read for BrokenReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("broken pipe"))
+        }
+    }
+
+    #[test]
+    fn spawn_pipe_reader_surfaces_read_errors() {
+        let handle = spawn_pipe_reader(BrokenReader, "stdout");
+
+        assert!(matches!(
+            collect_pipe_reader(Some(handle), "stdout"),
+            Err(HookBridgeError::Process { message })
+                if message.contains("failed to read child stdout")
+        ));
+    }
+
+    #[test]
+    fn collect_pipe_reader_surfaces_panics() {
+        let handle = std::thread::spawn(|| -> Result<Vec<u8>, HookBridgeError> {
+            std::panic::resume_unwind(Box::new("boom".to_string()));
+        });
+
+        assert_eq!(
+            collect_pipe_reader(Some(handle), "stderr"),
+            Err(HookBridgeError::Process {
+                message: "child stderr reader thread panicked".to_string(),
+            })
+        );
     }
 }

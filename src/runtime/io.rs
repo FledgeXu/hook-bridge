@@ -83,7 +83,7 @@ impl Io for FakeIo {
 
 #[cfg(test)]
 mod tests {
-    use super::{FakeIo, Io};
+    use super::{FakeIo, Io, StdIo};
 
     #[test]
     fn fake_io_returns_configured_stdin() {
@@ -94,5 +94,21 @@ mod tests {
         let result = io.read_stdin();
 
         assert_eq!(result, Ok(b"{}".to_vec()));
+    }
+
+    #[test]
+    fn fake_io_accepts_stdout_and_stderr_writes() {
+        let io = FakeIo::default();
+
+        assert_eq!(io.write_stdout(b"ok"), Ok(()));
+        assert_eq!(io.write_stderr(b"err"), Ok(()));
+    }
+
+    #[test]
+    fn std_io_supports_empty_reads_and_writes() {
+        let io = StdIo;
+
+        assert_eq!(io.write_stdout(b""), Ok(()));
+        assert_eq!(io.write_stderr(b""), Ok(()));
     }
 }

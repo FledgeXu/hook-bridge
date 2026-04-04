@@ -26,3 +26,17 @@ fn version_exits_with_success_and_writes_stdout() -> Result<(), Box<dyn std::err
 
     Ok(())
 }
+
+#[test]
+fn invalid_flag_exits_with_parameter_error() -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = Command::cargo_bin("hook_bridge")?;
+
+    command
+        .arg("--definitely-invalid")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("unexpected argument"));
+
+    Ok(())
+}

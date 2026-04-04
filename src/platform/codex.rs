@@ -60,7 +60,12 @@ pub fn translate_output(context: &RuntimeContext, result: &ExecutionResult) -> s
 
 #[cfg(test)]
 mod tests {
-    use super::parse_context_fields;
+    use std::path::PathBuf;
+
+    use crate::platform::Platform;
+    use crate::run::{ExecutionResult, InternalStatus, RuntimeContext};
+
+    use super::{parse_context_fields, translate_output};
 
     #[test]
     fn parses_hook_event_name_field() {
@@ -70,13 +75,97 @@ mod tests {
             "cwd": "/tmp",
         });
 
-        let parsed = parse_context_fields(&payload);
-        assert!(parsed.is_ok(), "payload should parse");
-        let Ok((event, thread, cwd, _)) = parsed else {
-            return;
+        assert_eq!(
+            parse_context_fields(&payload),
+            Ok((
+                "before_command".to_string(),
+                "t1".to_string(),
+                Some(PathBuf::from("/tmp")),
+                None,
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_fallback_event_and_session_fields() {
+        let payload = serde_json::json!({
+            "event": "after_command",
+            "session_id": "s2",
+            "transcript_path": "/tmp/transcript.json",
+        });
+
+        assert_eq!(
+            parse_context_fields(&payload),
+            Ok((
+                "after_command".to_string(),
+                "s2".to_string(),
+                None,
+                Some(PathBuf::from("/tmp/transcript.json")),
+            ))
+        );
+    }
+
+    #[test]
+    fn rejects_missing_required_fields() {
+        assert_eq!(
+            parse_context_fields(&serde_json::json!({ "thread_id": "t1" })),
+            Err(crate::error::HookBridgeError::PlatformProtocol {
+                message: "codex payload missing required field 'hook_event_name'".to_string(),
+            })
+        );
+        assert_eq!(
+            parse_context_fields(&serde_json::json!({ "hook_event_name": "before_command" })),
+            Err(crate::error::HookBridgeError::PlatformProtocol {
+                message: "codex payload missing required field 'thread_id' or 'session_id'"
+                    .to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn translates_success_and_failure_outputs() {
+        let context = RuntimeContext {
+            platform: Platform::Codex,
+            event: "before_command".to_string(),
+            rule_id: "r1".to_string(),
+            source_config_path: "/tmp/cfg.yaml".into(),
+            session_or_thread_id: "t1".to_string(),
+            cwd: None,
+            transcript_path: None,
+            raw_payload: "{}".to_string(),
         };
-        assert_eq!(event, "before_command");
-        assert_eq!(thread, "t1");
-        assert_eq!(cwd, Some(std::path::PathBuf::from("/tmp")));
+        let success = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+        };
+        let failure = ExecutionResult {
+            status: InternalStatus::Error,
+            message: Some("denied".to_string()),
+            system_message: Some("bridge blocked".to_string()),
+            exit_code: Some(1),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+        };
+
+        assert_eq!(
+            translate_output(&context, &success),
+            serde_json::json!({
+                "event": "before_command",
+                "continue": true
+            })
+        );
+        assert_eq!(
+            translate_output(&context, &failure),
+            serde_json::json!({
+                "event": "before_command",
+                "continue": false,
+                "stopReason": "denied",
+                "systemMessage": "bridge blocked",
+            })
+        );
     }
 }

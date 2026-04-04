@@ -303,10 +303,35 @@ pub fn load_metadata(
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+    use std::path::{Path, PathBuf};
+
+    use super::{
+        CLAUDE_TARGET, CODEX_TARGET, GenerateArgs, MANAGED_BY, MANAGED_VERSION,
+        build_generation_input, build_run_command, collect_platform_hooks,
+        ensure_no_unmanaged_conflict, execute, is_managed_content, load_metadata,
+        normalize_config_path, target_path,
+    };
     use crate::config::parse_and_normalize;
     use crate::platform::Platform;
 
-    use super::{build_generation_input, build_run_command, is_managed_content};
+    struct CurrentDirGuard {
+        original: PathBuf,
+    }
+
+    impl CurrentDirGuard {
+        fn enter(path: &Path) -> std::io::Result<Self> {
+            let original = env::current_dir()?;
+            env::set_current_dir(path)?;
+            Ok(Self { original })
+        }
+    }
+
+    impl Drop for CurrentDirGuard {
+        fn drop(&mut self) {
+            let _ = env::set_current_dir(&self.original);
+        }
+    }
 
     #[test]
     fn command_template_contains_platform_and_rule_id() {
@@ -326,6 +351,11 @@ mod tests {
     fn rejects_unmanaged_content() {
         let json = r#"{"hooks":[]}"#;
         assert!(!is_managed_content(json));
+    }
+
+    #[test]
+    fn rejects_invalid_json_as_unmanaged_content() {
+        assert!(!is_managed_content("{"));
     }
 
     #[test]
@@ -379,7 +409,10 @@ hooks:
         let generation = build_generation_input(&config);
 
         assert_eq!(generation.rules.len(), 1);
-        assert_eq!(generation.rules[0].platform, Platform::Claude);
+        assert_eq!(
+            generation.rules.first().map(|rule| rule.platform),
+            Some(Platform::Claude)
+        );
     }
 
     #[test]
@@ -420,19 +453,18 @@ hooks:
             .iter()
             .find(|rule| rule.platform == Platform::Claude);
         assert!(claude_rule.is_some(), "claude rule should exist");
+        let Some(claude_value) = claude_rule else {
+            return;
+        };
         let codex_rule = generation
             .rules
             .iter()
             .find(|rule| rule.platform == Platform::Codex);
         assert!(codex_rule.is_some(), "codex rule should exist");
-
-        let Some(claude_value) = claude_rule else {
-            return;
-        };
         let Some(codex_value) = codex_rule else {
             return;
         };
-        assert!(claude_value.native_extra.get("stopReason").is_none());
+        assert!(!claude_value.native_extra.contains_key("stopReason"));
         assert_eq!(
             codex_value.native_extra.get("stopReason"),
             Some(&serde_json::Value::String("denied".to_string()))
@@ -466,7 +498,7 @@ hooks:
         let Some(codex_value) = codex_rule else {
             return;
         };
-        assert!(codex_value.native_extra.get("enabled").is_none());
+        assert!(!codex_value.native_extra.contains_key("enabled"));
         assert_eq!(
             codex_value.native_extra.get("stopReason"),
             Some(&serde_json::Value::String("denied".to_string()))
@@ -494,5 +526,288 @@ hooks:
             assert_eq!(rule.timeout_field, "timeout_sec");
             assert_eq!(rule.timeout_value, 12);
         }
+    }
+
+    #[test]
+    fn normalize_and_target_paths_are_stable() {
+        let absolute = Path::new("/tmp/hook-bridge.yaml");
+
+        assert_eq!(normalize_config_path(absolute), Ok(absolute.to_path_buf()));
+        assert_eq!(target_path(Platform::Claude), Path::new(CLAUDE_TARGET));
+        assert_eq!(target_path(Platform::Codex), Path::new(CODEX_TARGET));
+    }
+
+    #[test]
+    fn collect_platform_hooks_emits_matcher_and_native_fields() {
+        let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+    matcher: .*
+    platforms:
+      codex:
+        stopReason: denied
+";
+        let config_result = parse_and_normalize("/tmp/cfg.yaml".into(), yaml);
+        assert!(config_result.is_ok(), "config should parse");
+        let Ok(config) = config_result else {
+            return;
+        };
+        let generation = build_generation_input(&config);
+        let codex_hooks = collect_platform_hooks(&generation, Platform::Codex);
+
+        assert_eq!(
+            codex_hooks,
+            vec![serde_json::json!({
+                "id": "r1",
+                "event": "before_command",
+                "command": "hook_bridge run --platform codex --rule-id r1",
+                "matcher": ".*",
+                "timeout_sec": 30,
+                "stopReason": "denied",
+            })]
+        );
+    }
+
+    #[test]
+    fn ensure_no_unmanaged_conflict_rejects_manual_file() {
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let target = temp.path().join("hooks.json");
+        let write_result = std::fs::write(&target, "{}");
+        assert!(write_result.is_ok(), "fixture file should be writable");
+
+        assert!(matches!(
+            ensure_no_unmanaged_conflict(&crate::runtime::RealRuntime::default(), &target),
+            Err(crate::error::HookBridgeError::FileConflict { path }) if path == target
+        ));
+    }
+
+    #[test]
+    fn ensure_no_unmanaged_conflict_allows_missing_and_managed_files() {
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let missing = temp.path().join("missing.json");
+        let managed = temp.path().join("managed.json");
+        let write_result = std::fs::write(
+            &managed,
+            serde_json::json!({
+                "_hook_bridge": {
+                    "managed_by": "hook_bridge"
+                }
+            })
+            .to_string(),
+        );
+        assert!(write_result.is_ok(), "managed fixture should be writable");
+
+        assert_eq!(
+            ensure_no_unmanaged_conflict(&crate::runtime::RealRuntime::default(), &missing),
+            Ok(())
+        );
+        assert_eq!(
+            ensure_no_unmanaged_conflict(&crate::runtime::RealRuntime::default(), &managed),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn execute_and_load_metadata_round_trip() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
+        let config_path = temp.path().join("hook-bridge.yaml");
+        let write_result = std::fs::write(
+            &config_path,
+            r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+",
+        );
+        assert!(write_result.is_ok(), "config file should be written");
+
+        assert_eq!(
+            execute(
+                &GenerateArgs {
+                    config: config_path.clone(),
+                },
+                &crate::runtime::RealRuntime::default(),
+            ),
+            Ok(())
+        );
+
+        let metadata_result =
+            load_metadata(&crate::runtime::RealRuntime::default(), Platform::Codex);
+        assert!(metadata_result.is_ok(), "metadata should load");
+        let Ok(metadata) = metadata_result else {
+            return;
+        };
+
+        assert_eq!(
+            metadata,
+            super::ManagedMetadata {
+                managed_by: MANAGED_BY.to_string(),
+                managed_version: MANAGED_VERSION,
+                source_config: config_path.display().to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn load_metadata_rejects_invalid_shapes() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
+        let create_result = std::fs::create_dir_all(".codex");
+        assert!(create_result.is_ok(), "codex dir should be creatable");
+        let write_result = std::fs::write(".codex/hooks.json", "{");
+        assert!(
+            write_result.is_ok(),
+            "managed file fixture should be writable"
+        );
+
+        assert!(matches!(
+            load_metadata(&crate::runtime::RealRuntime::default(), Platform::Codex),
+            Err(crate::error::HookBridgeError::PlatformProtocol { message })
+                if message.contains("invalid managed codex file JSON")
+        ));
+
+        let write_result = std::fs::write(
+            ".codex/hooks.json",
+            serde_json::json!({
+                "_hook_bridge": {
+                    "managed_by": "someone_else",
+                    "managed_version": 1,
+                    "source_config": "/tmp/cfg.yaml"
+                }
+            })
+            .to_string(),
+        );
+        assert!(
+            write_result.is_ok(),
+            "managed file fixture should be writable"
+        );
+
+        assert_eq!(
+            load_metadata(&crate::runtime::RealRuntime::default(), Platform::Codex),
+            Err(crate::error::HookBridgeError::PlatformProtocol {
+                message: format!(
+                    "file {} is not managed by hook_bridge",
+                    Path::new(CODEX_TARGET).display()
+                ),
+            })
+        );
+    }
+
+    #[test]
+    fn load_metadata_rejects_missing_metadata_fields() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
+        let create_result = std::fs::create_dir_all(".codex");
+        assert!(create_result.is_ok(), "codex dir should be creatable");
+
+        assert_metadata_error("{}", "missing _hook_bridge metadata in .codex/hooks.json");
+        assert_metadata_error(
+            &serde_json::json!({
+                "_hook_bridge": {
+                    "managed_version": 1,
+                    "source_config": "/tmp/cfg.yaml"
+                }
+            })
+            .to_string(),
+            "missing managed_by in .codex/hooks.json",
+        );
+        assert_metadata_error(
+            &serde_json::json!({
+                "_hook_bridge": {
+                    "managed_by": "hook_bridge",
+                    "source_config": "/tmp/cfg.yaml"
+                }
+            })
+            .to_string(),
+            "missing managed_version in .codex/hooks.json",
+        );
+        assert_metadata_error(
+            &serde_json::json!({
+                "_hook_bridge": {
+                    "managed_by": "hook_bridge",
+                    "managed_version": 999,
+                    "source_config": "/tmp/cfg.yaml"
+                }
+            })
+            .to_string(),
+            "managed_version '999' in .codex/hooks.json is out of range",
+        );
+        assert_metadata_error(
+            &serde_json::json!({
+                "_hook_bridge": {
+                    "managed_by": "hook_bridge",
+                    "managed_version": 1
+                }
+            })
+            .to_string(),
+            "missing source_config in .codex/hooks.json",
+        );
+    }
+
+    fn assert_metadata_error(content: &str, expected_message: &str) {
+        let write_result = std::fs::write(".codex/hooks.json", content);
+        assert!(
+            write_result.is_ok(),
+            "managed file fixture should be writable"
+        );
+        assert_eq!(
+            load_metadata(&crate::runtime::RealRuntime::default(), Platform::Codex),
+            Err(crate::error::HookBridgeError::PlatformProtocol {
+                message: expected_message.to_string(),
+            })
+        );
     }
 }
