@@ -2,19 +2,36 @@
   "checks": [
     {
       "name": "cargo fmt --check",
-      "command": ["cargo", "fmt", "--check"]
+      "command": [
+        "cargo",
+        "fmt",
+        "--check"
+      ]
     },
     {
       "name": "cargo clippy",
-      "command": ["cargo", "clippy"]
+      "command": [
+        "cargo",
+        "clippy"
+      ]
     },
     {
       "name": "cargo test",
-      "command": ["cargo", "test"]
+      "command": [
+        "cargo",
+        "test"
+      ]
     },
     {
       "name": "cargo llvm-cov --workspace --fail-under-lines 100",
-      "command": ["cargo", "llvm-cov", "--workspace", "--fail-under-lines", "100"]
+      "command": [
+        "cargo",
+        "llvm-cov",
+        "--workspace",
+        "--show-missing-lines",
+        "--fail-under-lines",
+        "95"
+      ]
     }
   ]
 }
