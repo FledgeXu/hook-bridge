@@ -1,6 +1,9 @@
 use clap::ValueEnum;
 use std::path::PathBuf;
 
+use crate::error::HookBridgeError;
+use crate::run::{ExecutionResult, RuntimeContext};
+
 pub mod capability;
 pub mod claude;
 pub mod codex;
@@ -30,6 +33,12 @@ pub struct ParsedContextFields {
     pub transcript_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlatformOutput {
+    pub stdout: Vec<u8>,
+    pub exit_code: i32,
+}
+
 #[must_use]
 pub fn normalize_event_name(platform: Platform, event: &str) -> Option<&'static str> {
     let normalized = match event {
@@ -46,9 +55,26 @@ pub fn normalize_event_name(platform: Platform, event: &str) -> Option<&'static 
     }
 }
 
+/// Translates a normalized execution result into the selected platform's native hook output.
+///
+/// # Errors
+///
+/// Returns a platform-protocol error when the internal result cannot be expressed for the
+/// selected platform event without silently degrading behavior.
+pub fn translate_output(
+    platform: Platform,
+    context: &RuntimeContext,
+    result: &ExecutionResult,
+) -> Result<PlatformOutput, HookBridgeError> {
+    match platform {
+        Platform::Claude => claude::translate_output(context, result),
+        Platform::Codex => codex::translate_output(context, result),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Platform, normalize_event_name};
+    use super::{Platform, PlatformOutput, normalize_event_name};
 
     #[test]
     fn platform_as_str_returns_stable_values() {
@@ -75,5 +101,19 @@ mod tests {
             Some("before_command")
         );
         assert_eq!(normalize_event_name(Platform::Codex, "Notification"), None);
+    }
+
+    #[test]
+    fn platform_output_preserves_stdout_and_exit_code() {
+        assert_eq!(
+            PlatformOutput {
+                stdout: b"{}".to_vec(),
+                exit_code: 0,
+            },
+            PlatformOutput {
+                stdout: b"{}".to_vec(),
+                exit_code: 0,
+            }
+        );
     }
 }

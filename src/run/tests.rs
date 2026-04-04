@@ -782,15 +782,7 @@ fn helper_functions_cover_error_and_output_paths() {
             },
         )
         .map(|output| {
-            let payload_result = String::from_utf8(output.stdout);
-            assert!(
-                payload_result.is_ok(),
-                "protocol output should be valid utf-8"
-            );
-            let Ok(payload) = payload_result else {
-                return serde_json::Value::Null;
-            };
-            let value_result = serde_json::from_str::<serde_json::Value>(payload.trim_end());
+            let value_result = serde_json::from_slice::<serde_json::Value>(&output.stdout);
             assert!(value_result.is_ok(), "protocol output should be valid json");
             let Ok(value) = value_result else {
                 return serde_json::Value::Null;
@@ -800,6 +792,7 @@ fn helper_functions_cover_error_and_output_paths() {
         Ok(serde_json::json!({
             "decision": "block",
             "reason": "boom",
+            "systemMessage": "bridge failed",
         }))
     );
 }

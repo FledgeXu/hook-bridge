@@ -7,8 +7,8 @@ use crate::cli::RunArgs;
 use crate::config::{PlatformRule, parse_and_normalize};
 use crate::error::HookBridgeError;
 use crate::generate;
-use crate::platform::Platform;
-use crate::platform::{claude, codex};
+use crate::platform::capability::{self, DecisionKind};
+use crate::platform::{self, Platform};
 use crate::runtime::Runtime;
 use crate::runtime::process::ProcessRequest;
 
@@ -90,7 +90,13 @@ fn execute_rule(
     let state_path = retry_state_path(runtime, context);
     let state = load_retry_state(runtime, &state_path)?;
     if retry_guard_engaged(rule, &state) {
-        return Ok(retry_guard_result());
+        let mut result = retry_guard_result();
+        if !capability::allowed_decisions(context.platform, &context.event)
+            .contains(&DecisionKind::Stop)
+        {
+            result.status = InternalStatus::Block;
+        }
+        return Ok(result);
     }
 
     let execution_result = run_user_command(runtime, rule, context);
@@ -175,18 +181,11 @@ fn translate_output(
     context: &RuntimeContext,
     result: &ExecutionResult,
 ) -> Result<TranslatedOutput, HookBridgeError> {
-    let json = match platform {
-        Platform::Claude => claude::translate_output(context, result),
-        Platform::Codex => codex::translate_output(context, result),
-    };
+    let output = platform::translate_output(platform, context, result)?;
 
-    let mut stdout =
-        serde_json::to_vec(&json).map_err(|error| HookBridgeError::PlatformProtocol {
-            message: format!("failed to serialize platform output JSON: {error}"),
-        })?;
-    stdout.push(b'\n');
-
-    Ok(TranslatedOutput { stdout })
+    Ok(TranslatedOutput {
+        stdout: output.stdout,
+    })
 }
 
 #[cfg(test)]

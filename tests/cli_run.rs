@@ -87,7 +87,7 @@ hooks:
         .write_stdin(payload)
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"continue\":true"));
+        .stdout(predicate::str::is_empty());
 
     let payload_result = fs::read_to_string(temp.path().join("payload.json"));
     assert!(
@@ -160,8 +160,7 @@ hooks:
         .write_stdin(payload)
         .assert()
         .success()
-        .stdout(predicate::str::contains("\"continue\":true"))
-        .stdout(predicate::str::contains("\"event\":\"PreToolUse\""));
+        .stdout(predicate::str::is_empty());
 
     let output_result = fs::read_to_string(temp.path().join("native.txt"));
     assert!(
@@ -834,7 +833,7 @@ hooks:
         .write_stdin(payload)
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""continue":true"#));
+        .stdout(predicate::str::is_empty());
 
     assert!(
         !state_path.exists(),

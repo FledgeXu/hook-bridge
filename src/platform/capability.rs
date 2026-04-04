@@ -80,19 +80,23 @@ const CODEX_EVENT_CAPS: &[EventCapability] = &[
         event: HookEvent::BeforeCommand,
         supports_matcher: true,
         allowed_extra_fields: &["continue", "stopReason", "systemMessage"],
-        allowed_decisions: &[DecisionKind::Continue, DecisionKind::Stop],
+        allowed_decisions: &[DecisionKind::Continue, DecisionKind::Block],
     },
     EventCapability {
         event: HookEvent::AfterCommand,
         supports_matcher: true,
         allowed_extra_fields: &["continue", "stopReason", "systemMessage"],
-        allowed_decisions: &[DecisionKind::Continue, DecisionKind::Stop],
+        allowed_decisions: &[
+            DecisionKind::Continue,
+            DecisionKind::Stop,
+            DecisionKind::Block,
+        ],
     },
     EventCapability {
         event: HookEvent::SessionStart,
         supports_matcher: false,
         allowed_extra_fields: &["continue", "stopReason", "systemMessage"],
-        allowed_decisions: &[DecisionKind::Continue, DecisionKind::Stop],
+        allowed_decisions: &[DecisionKind::Continue],
     },
 ];
 
@@ -187,9 +191,11 @@ mod tests {
 
     #[test]
     fn exposes_decision_capability_per_platform_event() {
-        assert!(allowed_decisions(Platform::Codex, "before_command").contains(&DecisionKind::Stop));
         assert!(
-            !allowed_decisions(Platform::Codex, "before_command").contains(&DecisionKind::Block)
+            allowed_decisions(Platform::Codex, "before_command").contains(&DecisionKind::Block)
+        );
+        assert!(
+            !allowed_decisions(Platform::Codex, "before_command").contains(&DecisionKind::Stop)
         );
     }
 

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use crate::error::HookBridgeError;
-use crate::platform::{ParsedContextFields, Platform, normalize_event_name};
+use crate::platform::{ParsedContextFields, Platform, PlatformOutput, normalize_event_name};
 use crate::run::{ExecutionResult, InternalStatus, RuntimeContext};
 
 pub const PLATFORM_NAME: &str = "claude";
@@ -55,16 +55,42 @@ pub fn parse_context_fields(
     })
 }
 
-#[must_use]
-pub fn translate_output(_context: &RuntimeContext, result: &ExecutionResult) -> serde_json::Value {
-    match result.status {
-        InternalStatus::Success => json!({}),
+/// Translates an internal execution result into Claude's native hook output.
+///
+/// # Errors
+///
+/// Returns a platform-protocol error if the output JSON cannot be serialized.
+pub fn translate_output(
+    _context: &RuntimeContext,
+    result: &ExecutionResult,
+) -> Result<PlatformOutput, HookBridgeError> {
+    let payload = match result.status {
+        InternalStatus::Success => {
+            return Ok(PlatformOutput {
+                stdout: Vec::new(),
+                exit_code: 0,
+            });
+        }
         InternalStatus::Stop | InternalStatus::Block | InternalStatus::Error => json!({
             "decision": "block",
             "message": result.message,
             "systemMessage": result.system_message,
         }),
-    }
+    };
+
+    Ok(PlatformOutput {
+        stdout: serialize_output(&payload)?,
+        exit_code: 0,
+    })
+}
+
+fn serialize_output(value: &serde_json::Value) -> Result<Vec<u8>, HookBridgeError> {
+    let mut stdout =
+        serde_json::to_vec(value).map_err(|error| HookBridgeError::PlatformProtocol {
+            message: format!("failed to serialize claude output JSON: {error}"),
+        })?;
+    stdout.push(b'\n');
+    Ok(stdout)
 }
 
 #[cfg(test)]
@@ -150,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn success_output_omits_decision_field() {
+    fn success_output_emits_empty_stdout() {
         let context = RuntimeContext {
             platform: Platform::Claude,
             raw_event: "before_command".to_string(),
@@ -170,10 +196,12 @@ mod tests {
             raw_stdout: Vec::new(),
             raw_stderr: Vec::new(),
         };
-        let out = translate_output(&context, &result);
-        assert!(
-            out.get("decision").is_none(),
-            "success path should omit decision"
+        assert_eq!(
+            translate_output(&context, &result),
+            Ok(crate::platform::PlatformOutput {
+                stdout: Vec::new(),
+                exit_code: 0,
+            })
         );
     }
 
@@ -199,13 +227,21 @@ mod tests {
             raw_stderr: Vec::new(),
         };
 
+        let translated = translate_output(&context, &result);
+        assert!(translated.is_ok(), "claude block output should serialize");
+        let Ok(output) = translated else {
+            return;
+        };
+        assert_eq!(output.exit_code, 0);
+        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout);
+        assert!(parsed.is_ok(), "claude block output should be JSON");
         assert_eq!(
-            translate_output(&context, &result),
-            serde_json::json!({
+            parsed.ok(),
+            Some(serde_json::json!({
                 "decision": "block",
                 "message": "denied",
                 "systemMessage": "bridge blocked",
-            })
+            }))
         );
     }
 }
