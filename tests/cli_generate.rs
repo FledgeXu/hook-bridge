@@ -289,3 +289,43 @@ hooks:
     };
     assert_eq!(codex_content, "{}");
 }
+
+#[test]
+fn generate_command_maps_invalid_config_to_config_exit_code() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_config_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r"
+version: 2
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+",
+    );
+    assert!(write_config_result.is_ok(), "config file should be written");
+
+    let command_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        command_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut command) = command_result else {
+        return;
+    };
+
+    command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains("config validation error"));
+}

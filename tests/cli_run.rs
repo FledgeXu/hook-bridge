@@ -898,3 +898,61 @@ hooks:
         .success()
         .stdout(predicate::str::contains(r#""decision":"block""#));
 }
+
+#[test]
+fn run_command_maps_invalid_json_payload_to_json_parse_exit_code() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--rule-id")
+        .arg("r1")
+        .write_stdin("{")
+        .assert()
+        .failure()
+        .code(5)
+        .stderr(predicate::str::contains("json parse error"));
+}
