@@ -213,33 +213,22 @@ fn parse_runtime_context(
             message: format!("invalid runtime JSON input: {error}"),
         })?;
 
-    let (raw_event, session_or_thread_id, cwd, transcript_path) = match args.platform {
+    let parsed = match args.platform {
         Platform::Claude => claude::parse_context_fields(&value)?,
         Platform::Codex => codex::parse_context_fields(&value)?,
     };
 
     Ok(RuntimeContext {
         platform: args.platform,
-        raw_event: raw_event.clone(),
-        event: normalize_platform_event_name(args.platform, &raw_event).to_string(),
+        raw_event: parsed.raw_event,
+        event: parsed.event,
         rule_id: args.rule_id.clone(),
         source_config_path: source_config_path.to_path_buf(),
-        session_or_thread_id,
-        cwd,
-        transcript_path,
+        session_or_thread_id: parsed.session_or_thread_id,
+        cwd: parsed.cwd,
+        transcript_path: parsed.transcript_path,
         raw_payload: raw_payload.to_string(),
     })
-}
-
-fn normalize_platform_event_name(platform: Platform, event: &str) -> &str {
-    match platform {
-        Platform::Claude | Platform::Codex => match event {
-            "PreToolUse" => "before_command",
-            "PostToolUse" => "after_command",
-            "SessionStart" => "session_start",
-            _ => event,
-        },
-    }
 }
 
 fn retry_state_root(runtime: &dyn Runtime) -> PathBuf {
@@ -328,7 +317,7 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     use crate::cli::RunArgs;
-    use crate::platform::Platform;
+    use crate::platform::{Platform, normalize_event_name};
 
     use crate::runtime::Runtime;
     use crate::runtime::clock::{Clock, FixedClock};
@@ -337,9 +326,8 @@ mod tests {
     use crate::runtime::process::{FakeProcessRunner, ProcessRunner};
 
     use super::{
-        RetryState, RuntimeContext, execute, load_retry_state, normalize_platform_event_name,
-        now_epoch_sec, parse_runtime_context, persist_retry_state, retry_state_path,
-        translate_output,
+        RetryState, RuntimeContext, execute, load_retry_state, now_epoch_sec,
+        parse_runtime_context, persist_retry_state, retry_state_path, translate_output,
     };
 
     struct TestRuntime {
@@ -447,7 +435,7 @@ mod tests {
             platform: Platform::Codex,
             rule_id: "r1".to_string(),
         };
-        let payload = r#"{"hook_event_name":"before_command","thread_id":"t1","cwd":"/tmp"}"#;
+        let payload = r#"{"hook_event_name":"before_command","session_id":"t1","cwd":"/tmp"}"#;
         let context = parse_runtime_context(&args, payload, Path::new("/tmp/cfg.yaml"));
         assert_eq!(
             context.as_ref().map(|value| value.event.as_str()),
@@ -471,7 +459,7 @@ mod tests {
             platform: Platform::Codex,
             rule_id: "r1".to_string(),
         };
-        let payload = r#"{"hook_event_name":"PreToolUse","thread_id":"t1","cwd":"/tmp"}"#;
+        let payload = r#"{"hook_event_name":"PreToolUse","session_id":"t1","cwd":"/tmp"}"#;
         let context = parse_runtime_context(&args, payload, Path::new("/tmp/cfg.yaml"));
 
         assert_eq!(
@@ -482,6 +470,40 @@ mod tests {
             context.as_ref().map(|value| value.raw_event.as_str()),
             Ok("PreToolUse")
         );
+    }
+
+    #[test]
+    fn parse_context_preserves_full_raw_payload() {
+        let args = RunArgs {
+            platform: Platform::Claude,
+            rule_id: "r1".to_string(),
+        };
+        let payload = r#"{"hook_event_name":"before_command","session_id":"s1","cwd":"/tmp","extra":{"nested":true}}"#;
+        let context = parse_runtime_context(&args, payload, Path::new("/tmp/cfg.yaml"));
+
+        assert_eq!(
+            context.as_ref().map(|value| value.raw_payload.as_str()),
+            Ok(payload)
+        );
+    }
+
+    #[test]
+    fn parse_context_rejects_payload_event_not_supported_by_selected_platform() {
+        let args = RunArgs {
+            platform: Platform::Codex,
+            rule_id: "r1".to_string(),
+        };
+
+        assert!(matches!(
+            parse_runtime_context(
+                &args,
+                r#"{"hook_event_name":"Notification","session_id":"t1"}"#,
+                Path::new("/tmp/cfg.yaml"),
+            ),
+            Err(crate::error::HookBridgeError::PlatformProtocol { message })
+                if message
+                    == "codex payload event 'Notification' is not supported for platform 'codex'"
+        ));
     }
 
     #[test]
@@ -590,23 +612,24 @@ mod tests {
     }
 
     #[test]
-    fn normalize_platform_event_name_accepts_native_and_unified_values() {
+    fn normalize_event_name_accepts_native_and_unified_values() {
         assert_eq!(
-            normalize_platform_event_name(Platform::Codex, "PreToolUse"),
-            "before_command"
+            normalize_event_name(Platform::Codex, "PreToolUse"),
+            Some("before_command")
         );
         assert_eq!(
-            normalize_platform_event_name(Platform::Claude, "PostToolUse"),
-            "after_command"
+            normalize_event_name(Platform::Claude, "PostToolUse"),
+            Some("after_command")
         );
         assert_eq!(
-            normalize_platform_event_name(Platform::Codex, "SessionStart"),
-            "session_start"
+            normalize_event_name(Platform::Codex, "SessionStart"),
+            Some("session_start")
         );
         assert_eq!(
-            normalize_platform_event_name(Platform::Claude, "before_command"),
-            "before_command"
+            normalize_event_name(Platform::Claude, "before_command"),
+            Some("before_command")
         );
+        assert_eq!(normalize_event_name(Platform::Codex, "Notification"), None);
     }
 
     fn write_managed_hooks_file(root: &Path, source_config: &str) {
@@ -650,13 +673,19 @@ hooks:
     fn execute_rejects_relative_managed_source_config() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let _lock = lock_result.expect("cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let temp = temp_result.expect("tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let _guard = guard_result.expect("cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
         write_managed_hooks_file(temp.path(), "hook-bridge.yaml");
         let runtime = ExecuteRuntime {
             fs: OsFileSystem,
@@ -685,13 +714,19 @@ hooks:
     fn execute_rejects_non_utf8_stdin() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let _lock = lock_result.expect("cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let temp = temp_result.expect("tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let _guard = guard_result.expect("cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
         let config_path = write_config(temp.path());
         write_managed_hooks_file(temp.path(), &config_path.display().to_string());
         let runtime = ExecuteRuntime {
@@ -722,13 +757,19 @@ hooks:
     fn execute_rejects_event_mismatch() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let _lock = lock_result.expect("cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let temp = temp_result.expect("tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let _guard = guard_result.expect("cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
         let config_path = write_config(temp.path());
         write_managed_hooks_file(temp.path(), &config_path.display().to_string());
         let runtime = ExecuteRuntime {
@@ -736,7 +777,7 @@ hooks:
             clock: FixedClock::new(std::time::SystemTime::UNIX_EPOCH),
             process: FakeProcessRunner::success(0),
             io: CapturingIo {
-                stdin: br#"{"event":"after_command","thread_id":"t1"}"#.to_vec(),
+                stdin: br#"{"hook_event_name":"after_command","session_id":"t1"}"#.to_vec(),
                 stdout: RefCell::new(Vec::new()),
             },
             tmp: temp.path().to_path_buf(),
@@ -760,13 +801,19 @@ hooks:
     fn execute_short_circuits_when_retry_guard_is_engaged() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let _lock = lock_result.expect("cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let temp = temp_result.expect("tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let _guard = guard_result.expect("cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
         let config_path = write_config(temp.path());
         write_managed_hooks_file(temp.path(), &config_path.display().to_string());
         let runtime = ExecuteRuntime {
@@ -774,7 +821,7 @@ hooks:
             clock: FixedClock::new(std::time::UNIX_EPOCH + std::time::Duration::from_secs(10)),
             process: FakeProcessRunner::success(0),
             io: CapturingIo {
-                stdin: br#"{"event":"before_command","thread_id":"t1"}"#.to_vec(),
+                stdin: br#"{"hook_event_name":"before_command","session_id":"t1"}"#.to_vec(),
                 stdout: RefCell::new(Vec::new()),
             },
             tmp: temp.path().to_path_buf(),

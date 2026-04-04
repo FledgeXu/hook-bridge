@@ -43,7 +43,7 @@ hooks:
         .assert()
         .success();
 
-    let payload = r#"{"hook_event_name":"before_command","thread_id":"t1","cwd":"."}"#;
+    let payload = r#"{"hook_event_name":"before_command","session_id":"t1","cwd":"."}"#;
 
     let run_result = Command::cargo_bin("hook_bridge");
     assert!(
@@ -116,7 +116,7 @@ hooks:
         .assert()
         .success();
 
-    let payload = r#"{"hook_event_name":"PreToolUse","thread_id":"t_native","cwd":"."}"#;
+    let payload = r#"{"hook_event_name":"PreToolUse","session_id":"t_native","cwd":"."}"#;
 
     let run_result = Command::cargo_bin("hook_bridge");
     assert!(
@@ -202,7 +202,7 @@ hooks:
         "managed hooks file should be copied to nested cwd"
     );
 
-    let payload = r#"{"hook_event_name":"before_command","thread_id":"abs_thread","cwd":"."}"#;
+    let payload = r#"{"hook_event_name":"before_command","session_id":"abs_thread","cwd":"."}"#;
     let run_result = Command::cargo_bin("hook_bridge");
     assert!(
         run_result.is_ok(),
@@ -272,8 +272,9 @@ hooks:
 
     let thread_suffix = temp.path().display();
     let unique_thread = format!("t_retry_{thread_suffix}");
-    let payload =
-        format!("{{\"event\":\"before_command\",\"thread_id\":\"{unique_thread}\",\"cwd\":\".\"}}");
+    let payload = format!(
+        "{{\"hook_event_name\":\"before_command\",\"session_id\":\"{unique_thread}\",\"cwd\":\".\"}}"
+    );
 
     let first_run = Command::cargo_bin("hook_bridge");
     assert!(
@@ -361,7 +362,7 @@ hooks:
         .assert()
         .success();
 
-    let payload = r#"{"hook_event_name":"before_command","thread_id":"spawn_fail","cwd":"."}"#;
+    let payload = r#"{"hook_event_name":"before_command","session_id":"spawn_fail","cwd":"."}"#;
     let run_result = Command::cargo_bin("hook_bridge");
     assert!(
         run_result.is_ok(),
@@ -421,7 +422,7 @@ hooks:
         .assert()
         .success();
 
-    let payload = r#"{"hook_event_name":"before_command","thread_id":"timeout_case","cwd":"."}"#;
+    let payload = r#"{"hook_event_name":"before_command","session_id":"timeout_case","cwd":"."}"#;
     let run_result = Command::cargo_bin("hook_bridge");
     assert!(
         run_result.is_ok(),
@@ -496,7 +497,7 @@ hooks:
         "patched managed hooks should be writable"
     );
 
-    let payload = r#"{"hook_event_name":"before_command","thread_id":"version_case","cwd":"."}"#;
+    let payload = r#"{"hook_event_name":"before_command","session_id":"version_case","cwd":"."}"#;
     let run_result = Command::cargo_bin("hook_bridge");
     assert!(
         run_result.is_ok(),
@@ -564,7 +565,7 @@ hooks:
             .success();
     }
 
-    let payload = r#"{"hook_event_name":"before_command","thread_id":"shared_thread","cwd":"."}"#;
+    let payload = r#"{"hook_event_name":"before_command","session_id":"shared_thread","cwd":"."}"#;
 
     let first_project_run_result = Command::cargo_bin("hook_bridge");
     assert!(

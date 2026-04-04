@@ -728,7 +728,7 @@ hooks:
                 [Platform::Claude, Platform::Codex]
             ),
             Err(crate::error::HookBridgeError::FileConflict { path })
-                if path == PathBuf::from(CODEX_TARGET)
+                if path == Path::new(CODEX_TARGET)
         ));
     }
 
@@ -763,13 +763,19 @@ hooks:
     fn execute_and_load_metadata_round_trip() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let _lock = lock_result.expect("cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let temp = temp_result.expect("tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let _guard = guard_result.expect("cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
         let config_path = temp.path().join("hook-bridge.yaml");
         let write_result = std::fs::write(
             &config_path,
@@ -796,7 +802,9 @@ hooks:
         let metadata_result =
             load_metadata(&crate::runtime::RealRuntime::default(), Platform::Codex);
         assert!(metadata_result.is_ok(), "metadata should load");
-        let metadata = metadata_result.expect("metadata should load");
+        let Ok(metadata) = metadata_result else {
+            return;
+        };
 
         assert_eq!(
             metadata,
@@ -812,13 +820,19 @@ hooks:
     fn load_metadata_rejects_invalid_shapes() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let _lock = lock_result.expect("cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let temp = temp_result.expect("tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let _guard = guard_result.expect("cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
         let create_result = std::fs::create_dir_all(".codex");
         assert!(create_result.is_ok(), "codex dir should be creatable");
         let write_result = std::fs::write(".codex/hooks.json", "{");
@@ -864,13 +878,19 @@ hooks:
     fn load_metadata_rejects_missing_metadata_fields() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let _lock = lock_result.expect("cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let temp = temp_result.expect("tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let _guard = guard_result.expect("cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
         let create_result = std::fs::create_dir_all(".codex");
         assert!(create_result.is_ok(), "codex dir should be creatable");
 

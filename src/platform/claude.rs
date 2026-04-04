@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde_json::json;
 
 use crate::error::HookBridgeError;
+use crate::platform::{ParsedContextFields, Platform, normalize_event_name};
 use crate::run::{ExecutionResult, InternalStatus, RuntimeContext};
 
 pub const PLATFORM_NAME: &str = "claude";
@@ -14,22 +15,26 @@ pub const PLATFORM_NAME: &str = "claude";
 /// Returns an error when required fields are missing or invalid.
 pub fn parse_context_fields(
     payload: &serde_json::Value,
-) -> Result<(String, String, Option<PathBuf>, Option<PathBuf>), HookBridgeError> {
+) -> Result<ParsedContextFields, HookBridgeError> {
     let event = payload
         .get("hook_event_name")
         .and_then(serde_json::Value::as_str)
-        .or_else(|| payload.get("event").and_then(serde_json::Value::as_str))
         .ok_or_else(|| HookBridgeError::PlatformProtocol {
             message: "claude payload missing required field 'hook_event_name'".to_string(),
         })?;
+    let normalized_event = normalize_event_name(Platform::Claude, event).ok_or_else(|| {
+        HookBridgeError::PlatformProtocol {
+            message: format!(
+                "claude payload event '{event}' is not supported for platform 'claude'"
+            ),
+        }
+    })?;
 
     let session = payload
         .get("session_id")
-        .or_else(|| payload.get("thread_id"))
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| HookBridgeError::PlatformProtocol {
-            message: "claude payload missing required field 'session_id' or 'thread_id'"
-                .to_string(),
+            message: "claude payload missing required field 'session_id'".to_string(),
         })?;
 
     let cwd = payload
@@ -41,7 +46,13 @@ pub fn parse_context_fields(
         .and_then(serde_json::Value::as_str)
         .map(PathBuf::from);
 
-    Ok((event.to_string(), session.to_string(), cwd, transcript))
+    Ok(ParsedContextFields {
+        raw_event: event.to_string(),
+        event: normalized_event.to_string(),
+        session_or_thread_id: session.to_string(),
+        cwd,
+        transcript_path: transcript,
+    })
 }
 
 #[must_use]
@@ -68,7 +79,7 @@ mod tests {
     #[test]
     fn parses_hook_event_name_field() {
         let payload = serde_json::json!({
-            "hook_event_name": "before_command",
+            "hook_event_name": "PreToolUse",
             "session_id": "s1",
             "cwd": "/tmp",
         });
@@ -77,31 +88,33 @@ mod tests {
 
         assert_eq!(
             parsed,
-            Ok((
-                "before_command".to_string(),
-                "s1".to_string(),
-                Some(PathBuf::from("/tmp")),
-                None,
-            ))
+            Ok(crate::platform::ParsedContextFields {
+                raw_event: "PreToolUse".to_string(),
+                event: "before_command".to_string(),
+                session_or_thread_id: "s1".to_string(),
+                cwd: Some(PathBuf::from("/tmp")),
+                transcript_path: None,
+            })
         );
     }
 
     #[test]
-    fn parses_fallback_event_and_thread_fields() {
+    fn preserves_optional_transcript_path() {
         let payload = serde_json::json!({
-            "event": "after_command",
-            "thread_id": "t1",
+            "hook_event_name": "after_command",
+            "session_id": "s1",
             "transcript_path": "/tmp/transcript.json",
         });
 
         assert_eq!(
             parse_context_fields(&payload),
-            Ok((
-                "after_command".to_string(),
-                "t1".to_string(),
-                None,
-                Some(PathBuf::from("/tmp/transcript.json")),
-            ))
+            Ok(crate::platform::ParsedContextFields {
+                raw_event: "after_command".to_string(),
+                event: "after_command".to_string(),
+                session_or_thread_id: "s1".to_string(),
+                cwd: None,
+                transcript_path: Some(PathBuf::from("/tmp/transcript.json")),
+            })
         );
     }
 
@@ -116,8 +129,22 @@ mod tests {
         assert_eq!(
             parse_context_fields(&serde_json::json!({ "hook_event_name": "before_command" })),
             Err(crate::error::HookBridgeError::PlatformProtocol {
-                message: "claude payload missing required field 'session_id' or 'thread_id'"
-                    .to_string(),
+                message: "claude payload missing required field 'session_id'".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_event_names() {
+        assert_eq!(
+            parse_context_fields(&serde_json::json!({
+                "hook_event_name": "Notification",
+                "session_id": "s1",
+            })),
+            Err(crate::error::HookBridgeError::PlatformProtocol {
+                message:
+                    "claude payload event 'Notification' is not supported for platform 'claude'"
+                        .to_string(),
             })
         );
     }
