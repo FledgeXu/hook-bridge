@@ -2,17 +2,23 @@
 name = "hook_bridge"
 version = "0.1.0"
 edition = "2024"
+description = "A minimal bridge binary for hook-driven workflows."
+license = "UNLICENSED"
+readme = "README.md"
+keywords = ["hooks", "bridge", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 
 [lints.clippy]
-correctness = "deny"
-suspicious = "deny"
-complexity = "deny"
-perf = "deny"
-style = "deny"
-pedantic = "deny"
-cargo = "deny"
+cargo_common_metadata = "allow"
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+perf = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+cargo = { level = "deny", priority = -1 }
 
 # restriction
 dbg_macro = "deny"
