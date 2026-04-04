@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 
 use crate::error::HookBridgeError;
 use crate::platform::Platform;
@@ -30,7 +30,6 @@ pub struct RawDefaults {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RawHookRule {
     pub id: String,
     pub event: String,
@@ -47,10 +46,12 @@ pub struct RawHookRule {
     pub max_retries: Option<u32>,
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_env_map")]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub platforms: Option<RawPlatformOverrides>,
+    #[serde(flatten, default)]
+    pub extra: BTreeMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -63,7 +64,6 @@ pub struct RawPlatformOverrides {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct RawPlatformOverride {
     #[serde(default)]
     pub event: Option<String>,
@@ -79,9 +79,9 @@ pub struct RawPlatformOverride {
     pub max_retries: Option<u32>,
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_env_map")]
     pub env: BTreeMap<String, String>,
-    #[serde(default)]
+    #[serde(flatten, default)]
     pub extra: BTreeMap<String, serde_json::Value>,
 }
 
@@ -203,6 +203,8 @@ fn validate_and_normalize(
             });
         }
 
+        validate_rule_extra_fields(&raw_rule)?;
+
         let claude = build_platform_rule(Platform::Claude, &raw.defaults, &raw_rule)?;
         let codex = build_platform_rule(Platform::Codex, &raw.defaults, &raw_rule)?;
 
@@ -221,6 +223,44 @@ fn validate_and_normalize(
     }
 
     Ok(NormalizedConfig { source_path, hooks })
+}
+
+fn validate_rule_extra_fields(raw_rule: &RawHookRule) -> Result<(), HookBridgeError> {
+    if let Some(key) = raw_rule.extra.keys().next() {
+        if let Some(path_hint) = platform_specific_field_path_hint(key) {
+            return Err(HookBridgeError::ConfigValidation {
+                message: format!(
+                    "rule '{}' field '{}' is platform-specific and must be set in {}",
+                    raw_rule.id, key, path_hint
+                ),
+            });
+        }
+
+        return Err(HookBridgeError::ConfigValidation {
+            message: format!(
+                "rule '{}' field '{}' is not recognized in hook schema",
+                raw_rule.id, key
+            ),
+        });
+    }
+
+    Ok(())
+}
+
+fn platform_specific_field_path_hint(key: &str) -> Option<&'static str> {
+    match key {
+        "decision" | "reason" => Some("'platforms.claude.<field>'"),
+        "continue" | "stopReason" | "systemMessage" => Some("'platforms.codex.<field>'"),
+        "enabled" => Some("'platforms.claude.enabled' or 'platforms.codex.enabled'"),
+        _ => None,
+    }
+}
+
+fn deserialize_env_map<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<BTreeMap<String, String>>::deserialize(deserializer).map(Option::unwrap_or_default)
 }
 
 fn build_platform_rule(
@@ -381,71 +421,335 @@ fn validate_extra_fields(
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::parse_and_normalize;
+    use crate::error::HookBridgeError;
 
-    #[test]
-    fn parses_and_resolves_defaults() {
-        let yaml = r"
-version: 1
-defaults:
-  timeout_sec: 12
-  max_retries: 3
-hooks:
-  - id: h1
-    event: before_command
-    command: echo ok
-";
-
-        let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
-        assert!(config_result.is_ok(), "valid config should parse");
-        let Ok(config) = config_result else {
+    fn assert_validation_error_contains(yaml: &str, needle: &str) {
+        let result = parse_and_normalize("cfg.yaml".into(), yaml);
+        assert!(result.is_err(), "config should be rejected");
+        let Err(error) = result else {
             return;
         };
-        let maybe_rule = config.hooks.iter().find(|rule| rule.id == "h1");
-        assert!(maybe_rule.is_some());
-        assert_eq!(
-            maybe_rule.and_then(|rule| rule.claude.as_ref().map(|rule| rule.timeout_sec)),
-            Some(12)
+        assert!(
+            matches!(error, HookBridgeError::ConfigValidation { .. }),
+            "expected ConfigValidation error variant"
         );
-        assert_eq!(
-            maybe_rule.and_then(|rule| rule.claude.as_ref().map(|rule| rule.shell.as_str())),
-            Some("sh")
+        let HookBridgeError::ConfigValidation { message } = error else {
+            return;
+        };
+        assert!(
+            message.contains(needle),
+            "error message should contain '{needle}', got: {message}"
         );
     }
 
     #[test]
-    fn rejects_invalid_rule_id_for_shell_safe_generation() {
+    fn rejects_missing_required_field() {
         let yaml = r"
 version: 1
 hooks:
-  - id: bad id
+  - id: r1
     event: before_command
-    command: echo ok
 ";
-        let result = parse_and_normalize("cfg.yaml".into(), yaml);
-        assert!(result.is_err(), "rule id with spaces must be rejected");
+
+        assert_validation_error_contains(yaml, "missing field `command`");
     }
 
     #[test]
-    fn default_shell_is_applied() {
+    fn rejects_duplicate_id() {
+        let yaml = r"
+version: 1
+hooks:
+  - id: same
+    event: before_command
+    command: echo one
+  - id: same
+    event: after_command
+    command: echo two
+";
+
+        assert_validation_error_contains(yaml, "duplicate rule id 'same'");
+    }
+
+    #[test]
+    fn rejects_invalid_version() {
+        let yaml = r"
+version: 2
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+";
+
+        assert_validation_error_contains(yaml, "field 'version' must be 1");
+    }
+
+    #[test]
+    fn rejects_invalid_event_name() {
+        let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: not_a_real_event
+    command: echo one
+";
+
+        assert_validation_error_contains(yaml, "field 'event' value 'not_a_real_event'");
+    }
+
+    #[test]
+    fn rejects_platform_specific_field_in_common_layer() {
+        let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    decision: block
+";
+
+        assert_validation_error_contains(yaml, "field 'decision' is platform-specific");
+    }
+
+    #[test]
+    fn rejects_enabled_in_common_layer() {
+        let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    enabled: false
+";
+
+        assert_validation_error_contains(yaml, "field 'enabled' is platform-specific");
+    }
+
+    #[test]
+    fn platform_override_replaces_common_fields() {
         let yaml = r"
 version: 1
 defaults:
-  shell: bash
+  shell: sh
+  timeout_sec: 30
 hooks:
-  - id: h1
+  - id: r1
     event: before_command
-    command: echo ok
+    command: echo common
+    matcher: .*common.*
+    platforms:
+      codex:
+        event: after_command
+        command: echo codex
+        matcher: .*codex.*
+        timeout_sec: 9
 ";
+
         let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
         assert!(config_result.is_ok(), "config should parse");
         let Ok(config) = config_result else {
             return;
         };
-        let maybe_rule = config.hooks.iter().find(|rule| rule.id == "h1");
+
+        let maybe_rule = config.hooks.iter().find(|hook| hook.id == "r1");
+        assert!(maybe_rule.is_some(), "rule must exist");
+        let Some(rule) = maybe_rule else {
+            return;
+        };
+
         assert_eq!(
-            maybe_rule.and_then(|rule| rule.codex.as_ref().map(|rule| rule.shell.as_str())),
+            rule.codex.as_ref().map(|value| value.event.as_str()),
+            Some("after_command")
+        );
+        assert_eq!(
+            rule.codex.as_ref().map(|value| value.command.as_str()),
+            Some("echo codex")
+        );
+        assert_eq!(
+            rule.codex
+                .as_ref()
+                .and_then(|value| value.matcher.as_deref()),
+            Some(".*codex.*")
+        );
+        assert_eq!(rule.codex.as_ref().map(|value| value.timeout_sec), Some(9));
+        assert_eq!(
+            rule.claude.as_ref().map(|value| value.command.as_str()),
+            Some("echo common")
+        );
+    }
+
+    #[test]
+    fn platform_specific_extra_field_is_allowed_in_platform_override() {
+        let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+    platforms:
+      codex:
+        continue: false
+";
+
+        let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+        assert!(config_result.is_ok(), "config should parse");
+        let Ok(config) = config_result else {
+            return;
+        };
+
+        let maybe_rule = config.hooks.iter().find(|hook| hook.id == "r1");
+        assert!(maybe_rule.is_some(), "rule must exist");
+        let Some(rule) = maybe_rule else {
+            return;
+        };
+
+        let codex = rule.codex.as_ref();
+        assert!(codex.is_some(), "codex mapping must exist");
+        let Some(codex_rule) = codex else {
+            return;
+        };
+        assert_eq!(
+            codex_rule.extra.get("continue"),
+            Some(&serde_json::Value::Bool(false))
+        );
+    }
+
+    #[test]
+    fn default_inheritance_order_is_platform_then_rule_then_defaults() {
+        let yaml = r"
+version: 1
+defaults:
+  shell: sh
+  timeout_sec: 90
+  max_retries: 7
+  working_dir: /from-default
+hooks:
+  - id: r1
+    event: before_command
+    command: echo common
+    shell: bash
+    timeout_sec: 50
+    max_retries: 4
+    working_dir: /from-rule
+    platforms:
+      codex:
+        command: echo codex
+        shell: zsh
+        timeout_sec: 10
+        max_retries: 2
+        working_dir: /from-platform
+";
+
+        let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+        assert!(config_result.is_ok(), "config should parse");
+        let Ok(config) = config_result else {
+            return;
+        };
+
+        let maybe_rule = config.hooks.iter().find(|hook| hook.id == "r1");
+        assert!(maybe_rule.is_some(), "rule must exist");
+        let Some(rule) = maybe_rule else {
+            return;
+        };
+
+        assert_eq!(
+            rule.claude.as_ref().map(|value| value.shell.as_str()),
             Some("bash")
+        );
+        assert_eq!(
+            rule.claude.as_ref().map(|value| value.timeout_sec),
+            Some(50)
+        );
+        assert_eq!(rule.claude.as_ref().map(|value| value.max_retries), Some(4));
+        assert_eq!(
+            rule.claude
+                .as_ref()
+                .and_then(|value| value.working_dir.as_ref()),
+            Some(&PathBuf::from("/from-rule"))
+        );
+
+        assert_eq!(
+            rule.codex.as_ref().map(|value| value.shell.as_str()),
+            Some("zsh")
+        );
+        assert_eq!(rule.codex.as_ref().map(|value| value.timeout_sec), Some(10));
+        assert_eq!(rule.codex.as_ref().map(|value| value.max_retries), Some(2));
+        assert_eq!(
+            rule.codex
+                .as_ref()
+                .and_then(|value| value.working_dir.as_ref()),
+            Some(&PathBuf::from("/from-platform"))
+        );
+    }
+
+    #[test]
+    fn env_and_working_dir_support_null_and_missing_paths() {
+        let yaml = r"
+version: 1
+defaults:
+  working_dir: /base
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    env: null
+    platforms:
+      codex:
+        working_dir: null
+        env:
+          X: y
+  - id: r2
+    event: before_command
+    command: echo two
+";
+
+        let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+        assert!(config_result.is_ok(), "config should parse");
+        let Ok(config) = config_result else {
+            return;
+        };
+
+        let rule1 = config.hooks.iter().find(|hook| hook.id == "r1");
+        assert!(rule1.is_some(), "r1 must exist");
+        let Some(rule1_value) = rule1 else {
+            return;
+        };
+
+        let rule1_claude = rule1_value.claude.as_ref();
+        assert!(rule1_claude.is_some(), "r1 claude should exist");
+        let Some(rule1_claude_value) = rule1_claude else {
+            return;
+        };
+        assert!(rule1_claude_value.env.is_empty());
+        assert_eq!(
+            rule1_claude_value.working_dir.as_ref(),
+            Some(&PathBuf::from("/base"))
+        );
+
+        let rule1_codex = rule1_value.codex.as_ref();
+        assert!(rule1_codex.is_some(), "r1 codex should exist");
+        let Some(rule1_codex_value) = rule1_codex else {
+            return;
+        };
+        assert_eq!(rule1_codex_value.env.get("X"), Some(&"y".to_string()));
+        assert_eq!(
+            rule1_codex_value.working_dir.as_ref(),
+            Some(&PathBuf::from("/base"))
+        );
+
+        let rule2 = config.hooks.iter().find(|hook| hook.id == "r2");
+        assert!(rule2.is_some(), "r2 must exist");
+        let Some(rule2_value) = rule2 else {
+            return;
+        };
+        assert_eq!(
+            rule2_value
+                .claude
+                .as_ref()
+                .and_then(|value| value.working_dir.as_ref()),
+            Some(&PathBuf::from("/base"))
         );
     }
 }

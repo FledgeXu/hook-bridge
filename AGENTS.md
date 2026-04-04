@@ -9,6 +9,7 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - Do clean code.
 - As little code as possible.
 - The code should be elegant and abstract.
+- Don't touch .codex Cargo.toml.
 
 ## Maintain by Robot
 - Implemented `impl-docs/hook-bridge-implementation/01-project-bootstrap-and-test-harness.md` project bootstrap, CLI skeleton, runtime side-effect abstractions, unified error model, smoke tests, and coverage gate command.
@@ -24,3 +25,5 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - Coverage-gate alignment fix (file index): `Makefile`, `README.md`, `AGENTS.md`.
 - Retry-state cross-project isolation fix (file index): `src/run/mod.rs`, `tests/cli_run.rs`, `AGENTS.md`.
 - Protocol field compatibility and gate rollback fixes (file index): `src/platform/codex.rs`, `src/platform/claude.rs`, `src/run/mod.rs`, `tests/cli_run.rs`, `Makefile`, `README.md`, `AGENTS.md`.
+- Config model and YAML validation implementation for phase 02 (file index): `src/config/mod.rs`, `AGENTS.md`.
+- Static-check follow-up fixes: clippy `never_loop`/test-lint cleanup, top-level `enabled` rejection test, and AGENTS constraint alignment (file index): `src/config/mod.rs`, `AGENTS.md`.
