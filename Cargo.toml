@@ -44,6 +44,7 @@ multiple_unsafe_ops_per_block = "deny"
 missing_assert_message = "deny"
 indexing_slicing = "deny"
 panic = "deny"
+too_many_lines = "deny"
 
 [dev-dependencies]
 assert_cmd = "2.2.0"
