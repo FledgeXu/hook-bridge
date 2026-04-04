@@ -199,6 +199,10 @@ mod tests {
             events(Platform::Claude),
             &["before_command", "after_command", "session_start"]
         );
+        assert_eq!(
+            events(Platform::Codex),
+            &["before_command", "after_command", "session_start"]
+        );
         assert!(supports_event(Platform::Claude, "session_start"));
         assert!(!supports_event(Platform::Claude, "unknown"));
         assert!(event_supports_matcher(Platform::Claude, "before_command"));

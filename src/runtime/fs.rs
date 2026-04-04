@@ -161,8 +161,17 @@ pub fn atomic_write(
     fs.create_dir_all(parent)?;
 
     let tmp = unique_tmp_path(path);
-    fs.write_all(&tmp, content)?;
-    fs.rename(&tmp, path)
+    if let Err(error) = fs.write_all(&tmp, content) {
+        let _ = fs.remove_file_if_exists(&tmp);
+        return Err(error);
+    }
+
+    if let Err(error) = fs.rename(&tmp, path) {
+        let _ = fs.remove_file_if_exists(&tmp);
+        return Err(error);
+    }
+
+    Ok(())
 }
 
 fn unique_tmp_path(path: &Path) -> PathBuf {
@@ -178,11 +187,114 @@ fn unique_tmp_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
     use std::fs;
     use std::path::PathBuf;
 
     use super::{FakeFileSystem, FileSystem, OsFileSystem, atomic_write};
     use crate::error::HookBridgeError;
+
+    #[derive(Default)]
+    struct TrackingFileSystem {
+        files: RefCell<BTreeMap<PathBuf, Vec<u8>>>,
+        fail_write: bool,
+        fail_rename_suffix: Option<String>,
+    }
+
+    impl TrackingFileSystem {
+        fn failing_write() -> Self {
+            Self {
+                files: RefCell::new(BTreeMap::new()),
+                fail_write: true,
+                fail_rename_suffix: None,
+            }
+        }
+
+        fn failing_rename(suffix: &str, path: PathBuf, content: &[u8]) -> Self {
+            let mut files = BTreeMap::new();
+            files.insert(path, content.to_vec());
+            Self {
+                files: RefCell::new(files),
+                fail_write: false,
+                fail_rename_suffix: Some(suffix.to_string()),
+            }
+        }
+    }
+
+    impl FileSystem for TrackingFileSystem {
+        fn exists(&self, path: &std::path::Path) -> Result<bool, HookBridgeError> {
+            Ok(self.files.borrow().contains_key(path))
+        }
+
+        fn read_to_string(&self, path: &std::path::Path) -> Result<String, HookBridgeError> {
+            let files = self.files.borrow();
+            let content = files.get(path).ok_or_else(|| HookBridgeError::Io {
+                operation: "read_to_string",
+                path: path.to_path_buf(),
+                kind: std::io::ErrorKind::NotFound,
+            })?;
+            String::from_utf8(content.clone()).map_err(|_| HookBridgeError::Io {
+                operation: "read_to_string",
+                path: path.to_path_buf(),
+                kind: std::io::ErrorKind::InvalidData,
+            })
+        }
+
+        fn write_all(&self, path: &std::path::Path, content: &[u8]) -> Result<(), HookBridgeError> {
+            if self.fail_write {
+                self.files
+                    .borrow_mut()
+                    .insert(path.to_path_buf(), b"{broken".to_vec());
+                return Err(HookBridgeError::Io {
+                    operation: "write",
+                    path: path.to_path_buf(),
+                    kind: std::io::ErrorKind::PermissionDenied,
+                });
+            }
+
+            self.files
+                .borrow_mut()
+                .insert(path.to_path_buf(), content.to_vec());
+            Ok(())
+        }
+
+        fn create_dir_all(&self, _path: &std::path::Path) -> Result<(), HookBridgeError> {
+            Ok(())
+        }
+
+        fn rename(
+            &self,
+            from: &std::path::Path,
+            to: &std::path::Path,
+        ) -> Result<(), HookBridgeError> {
+            if self
+                .fail_rename_suffix
+                .as_ref()
+                .is_some_and(|suffix| to.to_string_lossy().contains(suffix))
+            {
+                return Err(HookBridgeError::Io {
+                    operation: "rename",
+                    path: from.to_path_buf(),
+                    kind: std::io::ErrorKind::PermissionDenied,
+                });
+            }
+
+            let mut files = self.files.borrow_mut();
+            let content = files.remove(from).ok_or_else(|| HookBridgeError::Io {
+                operation: "rename",
+                path: from.to_path_buf(),
+                kind: std::io::ErrorKind::NotFound,
+            })?;
+            files.insert(to.to_path_buf(), content);
+            Ok(())
+        }
+
+        fn remove_file_if_exists(&self, path: &std::path::Path) -> Result<(), HookBridgeError> {
+            self.files.borrow_mut().remove(path);
+            Ok(())
+        }
+    }
 
     #[test]
     fn fake_filesystem_can_simulate_existence_checks() {
@@ -250,6 +362,45 @@ mod tests {
                 message: "path '/' has no parent directory".to_string(),
             })
         );
+    }
+
+    #[test]
+    fn atomic_write_removes_temp_file_after_write_failure() {
+        let fs = TrackingFileSystem::failing_write();
+        let target = PathBuf::from("/tmp/hooks.json");
+
+        let result = atomic_write(&fs, &target, br#"{"ok":true}"#);
+
+        assert!(matches!(
+            result,
+            Err(HookBridgeError::Io {
+                operation: "write",
+                ..
+            })
+        ));
+        assert_eq!(fs.files.borrow().len(), 0);
+    }
+
+    #[test]
+    fn atomic_write_preserves_original_target_after_rename_failure() {
+        let target = PathBuf::from("/tmp/hooks.json");
+        let fs =
+            TrackingFileSystem::failing_rename("hooks.json", target.clone(), br#"{"old":true}"#);
+
+        let result = atomic_write(&fs, &target, br#"{"new":true}"#);
+
+        assert!(matches!(
+            result,
+            Err(HookBridgeError::Io {
+                operation: "rename",
+                ..
+            })
+        ));
+        assert_eq!(
+            fs.files.borrow().get(&target),
+            Some(&br#"{"old":true}"#.to_vec())
+        );
+        assert_eq!(fs.files.borrow().len(), 1);
     }
 
     #[test]

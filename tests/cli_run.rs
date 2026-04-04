@@ -79,6 +79,75 @@ hooks:
 }
 
 #[test]
+fn run_command_accepts_native_platform_event_name_from_generated_hook() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let config_path = temp.path().join("hook-bridge.yaml");
+    let write_result = fs::write(
+        &config_path,
+        r"
+version: 1
+hooks:
+  - id: r_native
+    event: before_command
+    command: echo native > native.txt
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload = r#"{"hook_event_name":"PreToolUse","thread_id":"t_native","cwd":"."}"#;
+
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--rule-id")
+        .arg("r_native")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"continue\":true"))
+        .stdout(predicate::str::contains("\"event\":\"PreToolUse\""));
+
+    let output_result = fs::read_to_string(temp.path().join("native.txt"));
+    assert!(
+        output_result.is_ok(),
+        "native event mapping should still execute the configured rule"
+    );
+}
+
+#[test]
 fn run_uses_absolute_managed_source_config_across_working_directories() {
     let temp_result = tempfile::tempdir();
     assert!(temp_result.is_ok(), "tempdir creation should succeed");
@@ -224,7 +293,7 @@ hooks:
         .write_stdin(payload.as_str())
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""continue":false"#));
+        .stdout(predicate::str::contains(r#""decision":"block""#));
 
     let second_run = Command::cargo_bin("hook_bridge");
     assert!(
@@ -311,7 +380,7 @@ hooks:
         .write_stdin(payload)
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""continue":false"#))
+        .stdout(predicate::str::contains(r#""decision":"block""#))
         .stdout(predicate::str::contains("failed to spawn process"));
 }
 
@@ -371,7 +440,7 @@ hooks:
         .write_stdin(payload)
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""continue":false"#))
+        .stdout(predicate::str::contains(r#""decision":"block""#))
         .stdout(predicate::str::contains("timeout after 1s"));
 }
 
@@ -515,7 +584,7 @@ hooks:
         .write_stdin(payload)
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""continue":false"#));
+        .stdout(predicate::str::contains(r#""decision":"block""#));
 
     let second_project_run_result = Command::cargo_bin("hook_bridge");
     assert!(
@@ -535,7 +604,7 @@ hooks:
         .write_stdin(payload)
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""continue":false"#))
+        .stdout(predicate::str::contains(r#""decision":"block""#))
         .stdout(predicate::str::contains("max retries reached").not());
 
     let alpha_attempts_result = fs::read_to_string(alpha_dir.path().join("attempts.log"));

@@ -17,6 +17,7 @@ use crate::runtime::process::ProcessRequest;
 #[derive(Debug, Clone)]
 pub struct RuntimeContext {
     pub platform: Platform,
+    pub raw_event: String,
     pub event: String,
     pub rule_id: String,
     pub source_config_path: PathBuf,
@@ -212,14 +213,15 @@ fn parse_runtime_context(
             message: format!("invalid runtime JSON input: {error}"),
         })?;
 
-    let (event, session_or_thread_id, cwd, transcript_path) = match args.platform {
+    let (raw_event, session_or_thread_id, cwd, transcript_path) = match args.platform {
         Platform::Claude => claude::parse_context_fields(&value)?,
         Platform::Codex => codex::parse_context_fields(&value)?,
     };
 
     Ok(RuntimeContext {
         platform: args.platform,
-        event,
+        raw_event: raw_event.clone(),
+        event: normalize_platform_event_name(args.platform, &raw_event).to_string(),
         rule_id: args.rule_id.clone(),
         source_config_path: source_config_path.to_path_buf(),
         session_or_thread_id,
@@ -227,6 +229,17 @@ fn parse_runtime_context(
         transcript_path,
         raw_payload: raw_payload.to_string(),
     })
+}
+
+fn normalize_platform_event_name(platform: Platform, event: &str) -> &str {
+    match platform {
+        Platform::Claude | Platform::Codex => match event {
+            "PreToolUse" => "before_command",
+            "PostToolUse" => "after_command",
+            "SessionStart" => "session_start",
+            _ => event,
+        },
+    }
 }
 
 fn retry_state_root(runtime: &dyn Runtime) -> PathBuf {
@@ -324,8 +337,9 @@ mod tests {
     use crate::runtime::process::{FakeProcessRunner, ProcessRunner};
 
     use super::{
-        RetryState, RuntimeContext, execute, load_retry_state, now_epoch_sec,
-        parse_runtime_context, persist_retry_state, retry_state_path, translate_output,
+        RetryState, RuntimeContext, execute, load_retry_state, normalize_platform_event_name,
+        now_epoch_sec, parse_runtime_context, persist_retry_state, retry_state_path,
+        translate_output,
     };
 
     struct TestRuntime {
@@ -440,6 +454,10 @@ mod tests {
             Ok("before_command")
         );
         assert_eq!(
+            context.as_ref().map(|value| value.raw_event.as_str()),
+            Ok("before_command")
+        );
+        assert_eq!(
             context
                 .as_ref()
                 .map(|value| value.session_or_thread_id.as_str()),
@@ -448,9 +466,29 @@ mod tests {
     }
 
     #[test]
+    fn parse_context_preserves_raw_native_event_for_platform_output() {
+        let args = RunArgs {
+            platform: Platform::Codex,
+            rule_id: "r1".to_string(),
+        };
+        let payload = r#"{"hook_event_name":"PreToolUse","thread_id":"t1","cwd":"/tmp"}"#;
+        let context = parse_runtime_context(&args, payload, Path::new("/tmp/cfg.yaml"));
+
+        assert_eq!(
+            context.as_ref().map(|value| value.event.as_str()),
+            Ok("before_command")
+        );
+        assert_eq!(
+            context.as_ref().map(|value| value.raw_event.as_str()),
+            Ok("PreToolUse")
+        );
+    }
+
+    #[test]
     fn retry_key_is_stable_for_platform_session_and_rule() {
         let context = RuntimeContext {
             platform: Platform::Claude,
+            raw_event: "before_command".to_string(),
             event: "before_command".to_string(),
             rule_id: "rule_1".to_string(),
             source_config_path: "/tmp/custom/cfg.yaml".into(),
@@ -483,6 +521,7 @@ mod tests {
         };
         let context_a = RuntimeContext {
             platform: Platform::Codex,
+            raw_event: "before_command".to_string(),
             event: "before_command".to_string(),
             rule_id: "rule_same".to_string(),
             source_config_path: "/repo_a/hook-bridge.yaml".into(),
@@ -493,6 +532,7 @@ mod tests {
         };
         let context_b = RuntimeContext {
             platform: Platform::Codex,
+            raw_event: "before_command".to_string(),
             event: "before_command".to_string(),
             rule_id: "rule_same".to_string(),
             source_config_path: "/repo_b/hook-bridge.yaml".into(),
@@ -549,6 +589,26 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn normalize_platform_event_name_accepts_native_and_unified_values() {
+        assert_eq!(
+            normalize_platform_event_name(Platform::Codex, "PreToolUse"),
+            "before_command"
+        );
+        assert_eq!(
+            normalize_platform_event_name(Platform::Claude, "PostToolUse"),
+            "after_command"
+        );
+        assert_eq!(
+            normalize_platform_event_name(Platform::Codex, "SessionStart"),
+            "session_start"
+        );
+        assert_eq!(
+            normalize_platform_event_name(Platform::Claude, "before_command"),
+            "before_command"
+        );
+    }
+
     fn write_managed_hooks_file(root: &Path, source_config: &str) {
         let create_result = std::fs::create_dir_all(root.join(".codex"));
         assert!(create_result.is_ok(), "codex dir should be creatable");
@@ -590,19 +650,13 @@ hooks:
     fn execute_rejects_relative_managed_source_config() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let Ok(_lock) = lock_result else {
-            return;
-        };
+        let _lock = lock_result.expect("cwd lock should not be poisoned");
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+        let temp = temp_result.expect("tempdir creation should succeed");
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let Ok(_guard) = guard_result else {
-            return;
-        };
+        let _guard = guard_result.expect("cwd switch should succeed");
         write_managed_hooks_file(temp.path(), "hook-bridge.yaml");
         let runtime = ExecuteRuntime {
             fs: OsFileSystem,
@@ -631,19 +685,13 @@ hooks:
     fn execute_rejects_non_utf8_stdin() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let Ok(_lock) = lock_result else {
-            return;
-        };
+        let _lock = lock_result.expect("cwd lock should not be poisoned");
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+        let temp = temp_result.expect("tempdir creation should succeed");
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let Ok(_guard) = guard_result else {
-            return;
-        };
+        let _guard = guard_result.expect("cwd switch should succeed");
         let config_path = write_config(temp.path());
         write_managed_hooks_file(temp.path(), &config_path.display().to_string());
         let runtime = ExecuteRuntime {
@@ -674,19 +722,13 @@ hooks:
     fn execute_rejects_event_mismatch() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let Ok(_lock) = lock_result else {
-            return;
-        };
+        let _lock = lock_result.expect("cwd lock should not be poisoned");
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+        let temp = temp_result.expect("tempdir creation should succeed");
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let Ok(_guard) = guard_result else {
-            return;
-        };
+        let _guard = guard_result.expect("cwd switch should succeed");
         let config_path = write_config(temp.path());
         write_managed_hooks_file(temp.path(), &config_path.display().to_string());
         let runtime = ExecuteRuntime {
@@ -718,19 +760,13 @@ hooks:
     fn execute_short_circuits_when_retry_guard_is_engaged() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let Ok(_lock) = lock_result else {
-            return;
-        };
+        let _lock = lock_result.expect("cwd lock should not be poisoned");
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+        let temp = temp_result.expect("tempdir creation should succeed");
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let Ok(_guard) = guard_result else {
-            return;
-        };
+        let _guard = guard_result.expect("cwd switch should succeed");
         let config_path = write_config(temp.path());
         write_managed_hooks_file(temp.path(), &config_path.display().to_string());
         let runtime = ExecuteRuntime {
@@ -745,6 +781,7 @@ hooks:
         };
         let context = RuntimeContext {
             platform: Platform::Codex,
+            raw_event: "before_command".to_string(),
             event: "before_command".to_string(),
             rule_id: "r1".to_string(),
             source_config_path: config_path.clone(),
@@ -832,6 +869,7 @@ hooks:
         };
         let context = RuntimeContext {
             platform: Platform::Codex,
+            raw_event: "before_command".to_string(),
             event: "before_command".to_string(),
             rule_id: "r1".to_string(),
             source_config_path: "/tmp/cfg.yaml".into(),
@@ -881,10 +919,8 @@ hooks:
                 value
             }),
             Ok(serde_json::json!({
-                "event": "before_command",
-                "continue": false,
-                "stopReason": "boom",
-                "systemMessage": "bridge failed",
+                "decision": "block",
+                "reason": "boom",
             }))
         );
     }

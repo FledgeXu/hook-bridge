@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
@@ -26,7 +27,7 @@ pub struct ManagedMetadata {
 struct ManagedHooksFile {
     #[serde(rename = "_hook_bridge")]
     metadata: ManagedMetadata,
-    hooks: Vec<serde_json::Value>,
+    hooks: BTreeMap<String, Vec<serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +35,7 @@ pub struct PlatformGenerationRule {
     pub platform: Platform,
     pub rule_id: String,
     pub event: String,
+    pub native_event: String,
     pub command: String,
     pub matcher: Option<String>,
     pub timeout_field: String,
@@ -56,9 +58,21 @@ pub fn execute(args: &GenerateArgs, runtime: &dyn Runtime) -> Result<(), HookBri
     let source_config = normalize_config_path(&args.config)?;
     let normalized = parse_and_normalize(source_config, &yaml)?;
 
+    ensure_generation_targets_are_writable(runtime, [Platform::Claude, Platform::Codex])?;
+
     write_platform_file(runtime, &normalized, Platform::Claude)?;
     write_platform_file(runtime, &normalized, Platform::Codex)?;
 
+    Ok(())
+}
+
+fn ensure_generation_targets_are_writable(
+    runtime: &dyn Runtime,
+    platforms: [Platform; 2],
+) -> Result<(), HookBridgeError> {
+    for platform in platforms {
+        ensure_no_unmanaged_conflict(runtime, target_path(platform))?;
+    }
     Ok(())
 }
 
@@ -121,6 +135,7 @@ pub fn build_generation_input(normalized: &NormalizedConfig) -> PlatformGenerati
                         platform,
                         rule_id: hook.id.clone(),
                         event: rule.event.clone(),
+                        native_event: native_event_name(&rule.event).to_string(),
                         command: build_run_command(platform, &hook.id),
                         matcher: rule.matcher.clone(),
                         timeout_field: capability::timeout_field_name(platform).to_string(),
@@ -137,45 +152,59 @@ pub fn build_generation_input(normalized: &NormalizedConfig) -> PlatformGenerati
 fn collect_platform_hooks(
     generation: &PlatformGenerationInput,
     platform: Platform,
-) -> Vec<serde_json::Value> {
-    generation
+) -> BTreeMap<String, Vec<serde_json::Value>> {
+    let mut hooks = BTreeMap::new();
+
+    for rule in generation
         .rules
         .iter()
         .filter(|rule| rule.platform == platform)
-        .map(platform_rule_to_json)
-        .collect()
+    {
+        hooks
+            .entry(rule.native_event.clone())
+            .or_insert_with(Vec::new)
+            .push(platform_rule_to_json(rule));
+    }
+
+    hooks
 }
 
 fn platform_rule_to_json(rule: &PlatformGenerationRule) -> serde_json::Value {
-    let mut obj = serde_json::Map::new();
-    obj.insert(
-        "id".to_string(),
-        serde_json::Value::String(rule.rule_id.clone()),
+    let mut handler = serde_json::Map::new();
+    handler.insert(
+        "type".to_string(),
+        serde_json::Value::String("command".to_string()),
     );
-    obj.insert(
-        "event".to_string(),
-        serde_json::Value::String(rule.event.clone()),
-    );
-    obj.insert(
+    handler.insert(
         "command".to_string(),
         serde_json::Value::String(rule.command.clone()),
     );
-    if let Some(matcher) = &rule.matcher {
-        obj.insert(
-            "matcher".to_string(),
-            serde_json::Value::String(matcher.clone()),
-        );
-    }
-    obj.insert(
+    handler.insert(
+        "id".to_string(),
+        serde_json::Value::String(rule.rule_id.clone()),
+    );
+    handler.insert(
         rule.timeout_field.clone(),
         serde_json::Value::Number(rule.timeout_value.into()),
     );
 
     for (key, value) in &rule.native_extra {
-        obj.insert(key.clone(), value.clone());
+        handler.insert(key.clone(), value.clone());
     }
 
-    serde_json::Value::Object(obj)
+    let mut matcher_group = serde_json::Map::new();
+    if let Some(matcher) = &rule.matcher {
+        matcher_group.insert(
+            "matcher".to_string(),
+            serde_json::Value::String(matcher.clone()),
+        );
+    }
+    matcher_group.insert(
+        "hooks".to_string(),
+        serde_json::Value::Array(vec![serde_json::Value::Object(handler)]),
+    );
+
+    serde_json::Value::Object(matcher_group)
 }
 
 #[must_use]
@@ -185,6 +214,15 @@ pub fn build_run_command(platform: Platform, rule_id: &str) -> String {
         platform.as_str(),
         rule_id
     )
+}
+
+fn native_event_name(event: &str) -> &str {
+    match event {
+        "before_command" => "PreToolUse",
+        "after_command" => "PostToolUse",
+        "session_start" => "SessionStart",
+        _ => event,
+    }
 }
 
 fn ensure_no_unmanaged_conflict(
@@ -303,14 +341,15 @@ pub fn load_metadata(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::env;
     use std::path::{Path, PathBuf};
 
     use super::{
         CLAUDE_TARGET, CODEX_TARGET, GenerateArgs, MANAGED_BY, MANAGED_VERSION,
         build_generation_input, build_run_command, collect_platform_hooks,
-        ensure_no_unmanaged_conflict, execute, is_managed_content, load_metadata,
-        normalize_config_path, target_path,
+        ensure_generation_targets_are_writable, ensure_no_unmanaged_conflict, execute,
+        is_managed_content, load_metadata, normalize_config_path, target_path,
     };
     use crate::config::parse_and_normalize;
     use crate::platform::Platform;
@@ -375,18 +414,16 @@ hooks:
         let generation = build_generation_input(&config);
 
         assert_eq!(generation.rules.len(), 2);
-        assert!(
-            generation
-                .rules
-                .iter()
-                .any(|rule| rule.platform == Platform::Claude && rule.rule_id == "r1")
-        );
-        assert!(
-            generation
-                .rules
-                .iter()
-                .any(|rule| rule.platform == Platform::Codex && rule.rule_id == "r1")
-        );
+        assert!(generation.rules.iter().any(|rule| {
+            rule.platform == Platform::Claude
+                && rule.rule_id == "r1"
+                && rule.native_event == "PreToolUse"
+        }));
+        assert!(generation.rules.iter().any(|rule| {
+            rule.platform == Platform::Codex
+                && rule.rule_id == "r1"
+                && rule.native_event == "PreToolUse"
+        }));
     }
 
     #[test]
@@ -538,6 +575,46 @@ hooks:
     }
 
     #[test]
+    fn normalize_config_path_joins_relative_paths_from_current_directory() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
+        let current_dir_result = std::env::current_dir();
+        assert!(
+            current_dir_result.is_ok(),
+            "current directory should resolve after cwd switch"
+        );
+        let Ok(current_dir) = current_dir_result else {
+            return;
+        };
+
+        assert_eq!(
+            normalize_config_path(Path::new("hook-bridge.yaml")),
+            Ok(current_dir.join("hook-bridge.yaml"))
+        );
+    }
+
+    #[test]
+    fn native_event_name_maps_supported_and_passthrough_events() {
+        assert_eq!(super::native_event_name("before_command"), "PreToolUse");
+        assert_eq!(super::native_event_name("after_command"), "PostToolUse");
+        assert_eq!(super::native_event_name("session_start"), "SessionStart");
+        assert_eq!(super::native_event_name("custom"), "custom");
+    }
+
+    #[test]
     fn collect_platform_hooks_emits_matcher_and_native_fields() {
         let yaml = r"
 version: 1
@@ -560,14 +637,19 @@ hooks:
 
         assert_eq!(
             codex_hooks,
-            vec![serde_json::json!({
-                "id": "r1",
-                "event": "before_command",
-                "command": "hook_bridge run --platform codex --rule-id r1",
-                "matcher": ".*",
-                "timeout_sec": 30,
-                "stopReason": "denied",
-            })]
+            BTreeMap::from([(
+                "PreToolUse".to_string(),
+                vec![serde_json::json!({
+                    "matcher": ".*",
+                    "hooks": [{
+                        "type": "command",
+                        "id": "r1",
+                        "command": "hook_bridge run --platform codex --rule-id r1",
+                        "timeout_sec": 30,
+                        "stopReason": "denied",
+                    }]
+                })]
+            )])
         );
     }
 
@@ -619,7 +701,7 @@ hooks:
     }
 
     #[test]
-    fn execute_and_load_metadata_round_trip() {
+    fn preflight_generation_targets_rejects_any_unmanaged_target() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
         let Ok(_lock) = lock_result else {
@@ -635,6 +717,59 @@ hooks:
         let Ok(_guard) = guard_result else {
             return;
         };
+        let create_dir_result = std::fs::create_dir_all(".codex");
+        assert!(create_dir_result.is_ok(), "codex dir should be creatable");
+        let write_result = std::fs::write(".codex/hooks.json", "{}");
+        assert!(write_result.is_ok(), "fixture file should be writable");
+
+        assert!(matches!(
+            ensure_generation_targets_are_writable(
+                &crate::runtime::RealRuntime::default(),
+                [Platform::Claude, Platform::Codex]
+            ),
+            Err(crate::error::HookBridgeError::FileConflict { path })
+                if path == PathBuf::from(CODEX_TARGET)
+        ));
+    }
+
+    #[test]
+    fn preflight_generation_targets_allows_missing_targets() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let Ok(_guard) = guard_result else {
+            return;
+        };
+
+        assert_eq!(
+            ensure_generation_targets_are_writable(
+                &crate::runtime::RealRuntime::default(),
+                [Platform::Claude, Platform::Codex]
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn execute_and_load_metadata_round_trip() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let _lock = lock_result.expect("cwd lock should not be poisoned");
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let temp = temp_result.expect("tempdir creation should succeed");
+        let guard_result = CurrentDirGuard::enter(temp.path());
+        assert!(guard_result.is_ok(), "cwd switch should succeed");
+        let _guard = guard_result.expect("cwd switch should succeed");
         let config_path = temp.path().join("hook-bridge.yaml");
         let write_result = std::fs::write(
             &config_path,
@@ -661,9 +796,7 @@ hooks:
         let metadata_result =
             load_metadata(&crate::runtime::RealRuntime::default(), Platform::Codex);
         assert!(metadata_result.is_ok(), "metadata should load");
-        let Ok(metadata) = metadata_result else {
-            return;
-        };
+        let metadata = metadata_result.expect("metadata should load");
 
         assert_eq!(
             metadata,
@@ -679,19 +812,13 @@ hooks:
     fn load_metadata_rejects_invalid_shapes() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let Ok(_lock) = lock_result else {
-            return;
-        };
+        let _lock = lock_result.expect("cwd lock should not be poisoned");
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+        let temp = temp_result.expect("tempdir creation should succeed");
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let Ok(_guard) = guard_result else {
-            return;
-        };
+        let _guard = guard_result.expect("cwd switch should succeed");
         let create_result = std::fs::create_dir_all(".codex");
         assert!(create_result.is_ok(), "codex dir should be creatable");
         let write_result = std::fs::write(".codex/hooks.json", "{");
@@ -737,19 +864,13 @@ hooks:
     fn load_metadata_rejects_missing_metadata_fields() {
         let lock_result = crate::CWD_LOCK.lock();
         assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let Ok(_lock) = lock_result else {
-            return;
-        };
+        let _lock = lock_result.expect("cwd lock should not be poisoned");
         let temp_result = tempfile::tempdir();
         assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+        let temp = temp_result.expect("tempdir creation should succeed");
         let guard_result = CurrentDirGuard::enter(temp.path());
         assert!(guard_result.is_ok(), "cwd switch should succeed");
-        let Ok(_guard) = guard_result else {
-            return;
-        };
+        let _guard = guard_result.expect("cwd switch should succeed");
         let create_result = std::fs::create_dir_all(".codex");
         assert!(create_result.is_ok(), "codex dir should be creatable");
 

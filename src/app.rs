@@ -118,6 +118,7 @@ mod tests {
 
         assert!(matches!(runtime.fs().exists(Path::new(".")), Ok(false)));
         assert_eq!(runtime.clock().now(), std::time::SystemTime::UNIX_EPOCH);
+        assert_eq!(runtime.temp_dir(), std::env::temp_dir());
         assert!(
             runtime
                 .process_runner()

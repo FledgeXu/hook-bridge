@@ -126,6 +126,7 @@ mod tests {
     fn success_output_omits_decision_field() {
         let context = RuntimeContext {
             platform: Platform::Claude,
+            raw_event: "before_command".to_string(),
             event: "before_command".to_string(),
             rule_id: "r1".to_string(),
             source_config_path: "/tmp/cfg.yaml".into(),
@@ -153,6 +154,7 @@ mod tests {
     fn failure_output_blocks_with_messages() {
         let context = RuntimeContext {
             platform: Platform::Claude,
+            raw_event: "before_command".to_string(),
             event: "before_command".to_string(),
             rule_id: "r1".to_string(),
             source_config_path: "/tmp/cfg.yaml".into(),

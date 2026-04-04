@@ -46,14 +46,15 @@ pub fn parse_context_fields(
 pub fn translate_output(context: &RuntimeContext, result: &ExecutionResult) -> serde_json::Value {
     match result.status {
         InternalStatus::Success => json!({
-            "event": context.event,
+            "event": context.raw_event,
             "continue": true
         }),
         InternalStatus::Stop | InternalStatus::Block | InternalStatus::Error => json!({
-            "event": context.event,
-            "continue": false,
-            "stopReason": result.message,
-            "systemMessage": result.system_message,
+            "decision": "block",
+            "reason": result
+                .message
+                .clone()
+                .or_else(|| result.system_message.clone()),
         }),
     }
 }
@@ -126,6 +127,7 @@ mod tests {
     fn translates_success_and_failure_outputs() {
         let context = RuntimeContext {
             platform: Platform::Codex,
+            raw_event: "before_command".to_string(),
             event: "before_command".to_string(),
             rule_id: "r1".to_string(),
             source_config_path: "/tmp/cfg.yaml".into(),
@@ -161,10 +163,39 @@ mod tests {
         assert_eq!(
             translate_output(&context, &failure),
             serde_json::json!({
-                "event": "before_command",
-                "continue": false,
-                "stopReason": "denied",
-                "systemMessage": "bridge blocked",
+                "decision": "block",
+                "reason": "denied",
+            })
+        );
+    }
+
+    #[test]
+    fn translates_using_raw_event_name_when_internal_event_is_normalized() {
+        let context = RuntimeContext {
+            platform: Platform::Codex,
+            raw_event: "PreToolUse".to_string(),
+            event: "before_command".to_string(),
+            rule_id: "r1".to_string(),
+            source_config_path: "/tmp/cfg.yaml".into(),
+            session_or_thread_id: "t1".to_string(),
+            cwd: None,
+            transcript_path: None,
+            raw_payload: "{}".to_string(),
+        };
+        let success = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+        };
+
+        assert_eq!(
+            translate_output(&context, &success),
+            serde_json::json!({
+                "event": "PreToolUse",
+                "continue": true
             })
         );
     }
