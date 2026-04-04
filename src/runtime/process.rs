@@ -324,6 +324,25 @@ mod tests {
     }
 
     #[test]
+    fn system_runner_reports_child_stdin_write_failures() {
+        let runner = SystemProcessRunner;
+        let request = ProcessRequest {
+            program: "sh".to_string(),
+            args: vec!["-lc".to_string(), "exec 0<&-; exit 0".to_string()],
+            stdin: vec![b'x'; 1024 * 1024],
+            timeout: Duration::from_secs(1),
+            cwd: None,
+            env: BTreeMap::new(),
+        };
+
+        assert!(matches!(
+            runner.run(&request),
+            Err(HookBridgeError::Process { message })
+                if message.contains("failed to write child stdin")
+        ));
+    }
+
+    #[test]
     fn collect_pipe_reader_returns_empty_for_missing_handle() {
         assert_eq!(collect_pipe_reader(None, "stdout"), Ok(Vec::new()));
     }

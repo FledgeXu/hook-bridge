@@ -1,7 +1,30 @@
 use std::fs;
+use std::path::{Path, PathBuf};
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use sha2::{Digest, Sha256};
+
+fn retry_state_path(
+    platform: &str,
+    source_config_path: &Path,
+    session_id: &str,
+    rule_id: &str,
+) -> PathBuf {
+    let normalized_source_config =
+        fs::canonicalize(source_config_path).unwrap_or_else(|_| source_config_path.to_path_buf());
+    let mut hasher = Sha256::new();
+    hasher.update(normalized_source_config.to_string_lossy().as_bytes());
+    hasher.update(session_id.as_bytes());
+    let hash = hex::encode(hasher.finalize());
+
+    std::env::temp_dir()
+        .join("hook_bridge")
+        .join("retries")
+        .join(platform)
+        .join(hash)
+        .join(format!("{rule_id}.json"))
+}
 
 #[test]
 fn run_command_executes_rule_and_returns_codex_protocol() {
@@ -617,6 +640,205 @@ hooks:
     assert!(
         beta_attempts_result.is_ok(),
         "project B should execute command independently"
+    );
+}
+
+#[test]
+fn retry_state_is_isolated_between_rules_and_sessions() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let config_path = temp.path().join("hook-bridge.yaml");
+    let write_result = fs::write(
+        &config_path,
+        r"
+version: 1
+defaults:
+  max_retries: 3
+hooks:
+  - id: r1
+    event: before_command
+    command: exit 1
+  - id: r2
+    event: before_command
+    command: exit 1
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload_session_a =
+        r#"{"hook_event_name":"before_command","session_id":"session_a","cwd":"."}"#;
+    let payload_session_b =
+        r#"{"hook_event_name":"before_command","session_id":"session_b","cwd":"."}"#;
+
+    for (rule_id, payload) in [
+        ("r1", payload_session_a),
+        ("r2", payload_session_a),
+        ("r1", payload_session_b),
+    ] {
+        let run_result = Command::cargo_bin("hook_bridge");
+        assert!(
+            run_result.is_ok(),
+            "binary should build for integration tests"
+        );
+        let Ok(mut run_command) = run_result else {
+            return;
+        };
+        run_command
+            .current_dir(temp.path())
+            .arg("run")
+            .arg("--platform")
+            .arg("codex")
+            .arg("--rule-id")
+            .arg(rule_id)
+            .write_stdin(payload)
+            .assert()
+            .success();
+    }
+
+    let state_r1_a = retry_state_path("codex", &config_path, "session_a", "r1");
+    let state_r2_a = retry_state_path("codex", &config_path, "session_a", "r2");
+    let state_r1_b = retry_state_path("codex", &config_path, "session_b", "r1");
+
+    assert!(state_r1_a.exists(), "session_a/r1 retry state should exist");
+    assert!(state_r2_a.exists(), "session_a/r2 retry state should exist");
+    assert!(state_r1_b.exists(), "session_b/r1 retry state should exist");
+    assert_ne!(state_r1_a, state_r2_a);
+    assert_ne!(state_r1_a, state_r1_b);
+    assert_ne!(state_r2_a, state_r1_b);
+
+    for path in [state_r1_a, state_r2_a, state_r1_b] {
+        let cleanup_result = fs::remove_file(&path);
+        assert!(
+            cleanup_result.is_ok(),
+            "retry state fixture should be removable after test"
+        );
+    }
+}
+
+#[test]
+fn retry_state_file_is_created_on_failure_and_removed_after_success() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let config_path = temp.path().join("hook-bridge.yaml");
+    let write_result = fs::write(
+        &config_path,
+        r"
+version: 1
+defaults:
+  max_retries: 3
+hooks:
+  - id: r_reset
+    event: before_command
+    command: exit 1
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload = r#"{"hook_event_name":"before_command","session_id":"reset_session","cwd":"."}"#;
+    let state_path = retry_state_path("codex", &config_path, "reset_session", "r_reset");
+
+    let first_run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        first_run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut first_run) = first_run_result else {
+        return;
+    };
+    first_run
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--rule-id")
+        .arg("r_reset")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""decision":"block""#));
+
+    assert!(state_path.exists(), "failing run should create retry state");
+
+    let rewrite_result = fs::write(
+        &config_path,
+        r"
+version: 1
+defaults:
+  max_retries: 3
+hooks:
+  - id: r_reset
+    event: before_command
+    command: echo recovered
+",
+    );
+    assert!(
+        rewrite_result.is_ok(),
+        "config file should be rewritable between runs"
+    );
+
+    let second_run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        second_run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut second_run) = second_run_result else {
+        return;
+    };
+    second_run
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--rule-id")
+        .arg("r_reset")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""continue":true"#));
+
+    assert!(
+        !state_path.exists(),
+        "successful run should clear prior retry state"
     );
 }
 

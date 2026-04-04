@@ -455,4 +455,58 @@ mod tests {
             })
         ));
     }
+
+    #[test]
+    fn os_filesystem_remove_file_surfaces_non_not_found_errors() {
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let fs = OsFileSystem;
+        let directory = temp.path().join("dir");
+        let mkdir_result = fs_err::create_dir_all(&directory);
+        assert!(
+            mkdir_result.is_ok(),
+            "fixture directory should be creatable"
+        );
+
+        assert!(matches!(
+            fs.remove_file_if_exists(&directory),
+            Err(HookBridgeError::Io {
+                operation: "remove_file",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn tracking_filesystem_surfaces_invalid_utf8_and_missing_rename_source() {
+        let path = PathBuf::from("/tmp/binary.txt");
+        let fs = TrackingFileSystem {
+            files: RefCell::new(BTreeMap::from([(path.clone(), vec![0xff])])),
+            fail_write: false,
+            fail_rename_suffix: None,
+        };
+
+        assert!(matches!(
+            fs.read_to_string(&path),
+            Err(HookBridgeError::Io {
+                operation: "read_to_string",
+                kind: std::io::ErrorKind::InvalidData,
+                ..
+            })
+        ));
+        assert!(matches!(
+            fs.rename(
+                PathBuf::from("/tmp/missing").as_path(),
+                PathBuf::from("/tmp/out").as_path()
+            ),
+            Err(HookBridgeError::Io {
+                operation: "rename",
+                kind: std::io::ErrorKind::NotFound,
+                ..
+            })
+        ));
+    }
 }
