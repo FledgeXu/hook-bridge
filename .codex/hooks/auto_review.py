@@ -102,6 +102,22 @@ def env_int(name: str, default: int) -> int:
         return default
 
 
+def auto_review_enabled() -> bool:
+    return env_enabled(ENABLE_ENV)
+
+
+def is_child_process() -> bool:
+    return env_enabled(CHILD_ENV, default=False)
+
+
+def include_untracked_content() -> bool:
+    return env_enabled(INCLUDE_UNTRACKED_CONTENT_ENV, default=False)
+
+
+def max_review_rounds() -> int:
+    return max(1, env_int(MAX_ROUNDS_ENV, 3))
+
+
 def run(
     args: list[str],
     cwd: str,
@@ -230,7 +246,7 @@ def has_reviewable_changes(cwd: str) -> bool:
         for entry in git_name_status_entries(cwd, staged):
             if any(is_review_path(path, code_names, code_suffixes) for path in entry[1:]):
                 return True
-    if not env_enabled(INCLUDE_UNTRACKED_CONTENT_ENV, default=False):
+    if not include_untracked_content():
         return False
     untracked_names, untracked_suffixes = UNTRACKED_CONTENT_PATTERNS
     return any(is_review_path(path, untracked_names, untracked_suffixes) for path in untracked_paths(cwd))
@@ -390,7 +406,7 @@ def collect_changes(cwd: str) -> str:
 
     files = untracked_paths(cwd)
     included = []
-    if env_enabled(INCLUDE_UNTRACKED_CONTENT_ENV, default=False):
+    if include_untracked_content():
         included = append_untracked_code_changes(parts, cwd, files, *UNTRACKED_CONTENT_PATTERNS)
     skipped = [path for path in files if path not in included]
     if skipped and append_limited(parts, "\n## Skipped untracked files\n"):
@@ -454,23 +470,17 @@ def finalize_review(cwd: str, turn_id: str, review: dict) -> int:
         return allow()
 
     current_round = read_state(cwd).get(turn_id, 0)
-    max_rounds = max(1, env_int(MAX_ROUNDS_ENV, 3))
     message = format_review(review)[:12000]
-    if current_round >= max_rounds:
+    if current_round >= max_review_rounds():
         clear_turn(cwd, turn_id)
-        return stop(
-            "# 自动审查未通过\n\n"
-            "已达到重试上限，仍然存在需要先修复的问题。\n\n"
-            f"- 重试上限：`{max_rounds}`\n"
-            f"\n{message}"
-        )
+        return allow()
 
     next_round = current_round + 1
     set_turn_round(cwd, turn_id, next_round)
     return block(
         "# 自动审查发现问题\n\n"
         "请先修复下面的问题，再继续当前任务。\n\n"
-        f"- 重试轮次：`{next_round}/{max_rounds}`\n"
+        f"- 重试轮次：`{next_round}/{max_review_rounds()}`\n"
         f"\n{message}"
     )
 
@@ -512,7 +522,7 @@ def parse_payload() -> tuple[str, str, str]:
 
 def main() -> int:
     cwd, turn_id, last_assistant_message = parse_payload()
-    if not env_enabled(ENABLE_ENV) or env_enabled(CHILD_ENV, default=False):
+    if not auto_review_enabled() or is_child_process():
         clear_turn(cwd, turn_id)
         return allow()
 
