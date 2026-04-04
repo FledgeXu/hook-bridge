@@ -2,9 +2,130 @@ use std::collections::BTreeSet;
 
 use super::Platform;
 
-pub const CLAUDE_EVENTS: &[&str] = &["before_command", "after_command", "session_start"];
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HookEvent {
+    BeforeCommand,
+    AfterCommand,
+    SessionStart,
+}
 
+impl HookEvent {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::BeforeCommand => "before_command",
+            Self::AfterCommand => "after_command",
+            Self::SessionStart => "session_start",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DecisionKind {
+    Continue,
+    Stop,
+    Block,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct EventCapability {
+    pub event: HookEvent,
+    pub supports_matcher: bool,
+    pub allowed_extra_fields: &'static [&'static str],
+    pub allowed_decisions: &'static [DecisionKind],
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PlatformCapability {
+    pub platform: Platform,
+    pub timeout_field: &'static str,
+    pub events: &'static [EventCapability],
+}
+
+const CLAUDE_EVENT_CAPS: &[EventCapability] = &[
+    EventCapability {
+        event: HookEvent::BeforeCommand,
+        supports_matcher: true,
+        allowed_extra_fields: &["decision", "reason"],
+        allowed_decisions: &[
+            DecisionKind::Continue,
+            DecisionKind::Stop,
+            DecisionKind::Block,
+        ],
+    },
+    EventCapability {
+        event: HookEvent::AfterCommand,
+        supports_matcher: true,
+        allowed_extra_fields: &["decision", "reason"],
+        allowed_decisions: &[
+            DecisionKind::Continue,
+            DecisionKind::Stop,
+            DecisionKind::Block,
+        ],
+    },
+    EventCapability {
+        event: HookEvent::SessionStart,
+        supports_matcher: false,
+        allowed_extra_fields: &["decision", "reason"],
+        allowed_decisions: &[
+            DecisionKind::Continue,
+            DecisionKind::Stop,
+            DecisionKind::Block,
+        ],
+    },
+];
+
+const CODEX_EVENT_CAPS: &[EventCapability] = &[
+    EventCapability {
+        event: HookEvent::BeforeCommand,
+        supports_matcher: true,
+        allowed_extra_fields: &["continue", "stopReason", "systemMessage"],
+        allowed_decisions: &[DecisionKind::Continue, DecisionKind::Stop],
+    },
+    EventCapability {
+        event: HookEvent::AfterCommand,
+        supports_matcher: true,
+        allowed_extra_fields: &["continue", "stopReason", "systemMessage"],
+        allowed_decisions: &[DecisionKind::Continue, DecisionKind::Stop],
+    },
+    EventCapability {
+        event: HookEvent::SessionStart,
+        supports_matcher: false,
+        allowed_extra_fields: &["continue", "stopReason", "systemMessage"],
+        allowed_decisions: &[DecisionKind::Continue, DecisionKind::Stop],
+    },
+];
+
+const CLAUDE_CAPABILITY: PlatformCapability = PlatformCapability {
+    platform: Platform::Claude,
+    timeout_field: "timeout_sec",
+    events: CLAUDE_EVENT_CAPS,
+};
+
+const CODEX_CAPABILITY: PlatformCapability = PlatformCapability {
+    platform: Platform::Codex,
+    timeout_field: "timeout_sec",
+    events: CODEX_EVENT_CAPS,
+};
+
+pub const CLAUDE_EVENTS: &[&str] = &["before_command", "after_command", "session_start"];
 pub const CODEX_EVENTS: &[&str] = &["before_command", "after_command", "session_start"];
+
+#[must_use]
+pub const fn matrix(platform: Platform) -> &'static PlatformCapability {
+    match platform {
+        Platform::Claude => &CLAUDE_CAPABILITY,
+        Platform::Codex => &CODEX_CAPABILITY,
+    }
+}
+
+#[must_use]
+pub fn event_capability(platform: Platform, event: &str) -> Option<&'static EventCapability> {
+    matrix(platform)
+        .events
+        .iter()
+        .find(|entry| entry.event.as_str() == event)
+}
 
 #[must_use]
 pub fn events(platform: Platform) -> &'static [&'static str] {
@@ -16,30 +137,58 @@ pub fn events(platform: Platform) -> &'static [&'static str] {
 
 #[must_use]
 pub fn supports_event(platform: Platform, event: &str) -> bool {
-    events(platform).contains(&event)
+    event_capability(platform, event).is_some()
 }
 
 #[must_use]
 pub fn event_supports_matcher(platform: Platform, event: &str) -> bool {
-    match platform {
-        Platform::Claude => matches!(event, "before_command" | "after_command"),
-        Platform::Codex => matches!(event, "before_command" | "after_command"),
-    }
+    event_capability(platform, event).is_some_and(|entry| entry.supports_matcher)
 }
 
 #[must_use]
 pub fn timeout_field_name(platform: Platform) -> &'static str {
-    match platform {
-        Platform::Claude | Platform::Codex => "timeout_sec",
-    }
+    matrix(platform).timeout_field
 }
 
 #[must_use]
-pub fn allowed_extra_fields(platform: Platform, _event: &str) -> BTreeSet<&'static str> {
-    match platform {
-        Platform::Claude => ["decision", "reason"].into_iter().collect(),
-        Platform::Codex => ["continue", "stopReason", "systemMessage"]
-            .into_iter()
-            .collect(),
+pub fn allowed_extra_fields(platform: Platform, event: &str) -> BTreeSet<&'static str> {
+    event_capability(platform, event)
+        .map(|entry| entry.allowed_extra_fields.iter().copied().collect())
+        .unwrap_or_default()
+}
+
+#[must_use]
+pub fn allowed_decisions(platform: Platform, event: &str) -> &'static [DecisionKind] {
+    event_capability(platform, event).map_or(&[], |entry| entry.allowed_decisions)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::platform::Platform;
+
+    use super::{DecisionKind, allowed_decisions, event_capability, timeout_field_name};
+
+    #[test]
+    fn returns_event_capability_for_known_event() {
+        let cap = event_capability(Platform::Codex, "before_command");
+        assert!(cap.is_some(), "event capability should exist");
+        let Some(value) = cap else {
+            return;
+        };
+        assert!(value.supports_matcher);
+    }
+
+    #[test]
+    fn timeout_field_is_exposed_from_matrix() {
+        assert_eq!(timeout_field_name(Platform::Claude), "timeout_sec");
+        assert_eq!(timeout_field_name(Platform::Codex), "timeout_sec");
+    }
+
+    #[test]
+    fn exposes_decision_capability_per_platform_event() {
+        assert!(allowed_decisions(Platform::Codex, "before_command").contains(&DecisionKind::Stop));
+        assert!(
+            !allowed_decisions(Platform::Codex, "before_command").contains(&DecisionKind::Block)
+        );
     }
 }

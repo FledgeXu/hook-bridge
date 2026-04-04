@@ -367,9 +367,10 @@ fn build_platform_rule(
         });
     }
 
-    let extra = override_block
+    let mut extra = override_block
         .as_ref()
         .map_or_else(BTreeMap::new, |block| block.extra.clone());
+    extra.remove("enabled");
 
     validate_extra_fields(platform, &event, &extra, &raw_rule.id)?;
 
