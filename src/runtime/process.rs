@@ -1,0 +1,214 @@
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
+
+use wait_timeout::ChildExt;
+
+use crate::error::HookBridgeError;
+
+#[derive(Debug, Clone)]
+pub struct ProcessRequest {
+    pub program: String,
+    pub args: Vec<String>,
+    pub stdin: Vec<u8>,
+    pub timeout: Duration,
+    pub cwd: Option<PathBuf>,
+    pub env: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessOutput {
+    pub status_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+pub trait ProcessRunner {
+    /// Executes a process request and captures its output.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the process fails to spawn, times out, or output cannot be read.
+    fn run(&self, request: &ProcessRequest) -> Result<ProcessOutput, HookBridgeError>;
+}
+
+#[derive(Debug, Default)]
+pub struct SystemProcessRunner;
+
+impl ProcessRunner for SystemProcessRunner {
+    fn run(&self, request: &ProcessRequest) -> Result<ProcessOutput, HookBridgeError> {
+        let mut command = Command::new(&request.program);
+        command
+            .args(&request.args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        if let Some(cwd) = &request.cwd {
+            command.current_dir(cwd);
+        }
+
+        if !request.env.is_empty() {
+            command.envs(
+                request
+                    .env
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+            );
+        }
+
+        let mut child = command.spawn().map_err(|error| HookBridgeError::Process {
+            message: format!("failed to spawn process: {error}"),
+        })?;
+
+        let mut stdout_reader = child
+            .stdout
+            .take()
+            .map(|reader| spawn_pipe_reader(reader, "stdout"));
+        let mut stderr_reader = child
+            .stderr
+            .take()
+            .map(|reader| spawn_pipe_reader(reader, "stderr"));
+
+        if let Some(mut stdin) = child.stdin.take() {
+            if !request.stdin.is_empty()
+                && let Err(error) = stdin.write_all(&request.stdin)
+            {
+                cleanup_child(&mut child, stdout_reader.take(), stderr_reader.take(), true);
+                return Err(HookBridgeError::Process {
+                    message: format!("failed to write child stdin: {error}"),
+                });
+            }
+            // Drop stdin handle explicitly to signal EOF to child process.
+            drop(stdin);
+        } else {
+            cleanup_child(&mut child, stdout_reader.take(), stderr_reader.take(), true);
+            return Err(HookBridgeError::Process {
+                message: "child stdin unavailable".to_string(),
+            });
+        }
+
+        let status = match child.wait_timeout(request.timeout) {
+            Ok(status) => status,
+            Err(error) => {
+                cleanup_child(&mut child, stdout_reader.take(), stderr_reader.take(), true);
+                return Err(HookBridgeError::Process {
+                    message: format!("failed while waiting child process: {error}"),
+                });
+            }
+        };
+
+        let Some(status) = status else {
+            cleanup_child(&mut child, stdout_reader.take(), stderr_reader.take(), true);
+            return Err(HookBridgeError::Timeout {
+                timeout_sec: request.timeout.as_secs(),
+            });
+        };
+
+        let stdout = collect_pipe_reader(stdout_reader.take(), "stdout")?;
+        let stderr = collect_pipe_reader(stderr_reader.take(), "stderr")?;
+
+        Ok(ProcessOutput {
+            status_code: status.code().unwrap_or(-1),
+            stdout,
+            stderr,
+        })
+    }
+}
+
+fn spawn_pipe_reader<R>(
+    mut reader: R,
+    stream_name: &'static str,
+) -> JoinHandle<Result<Vec<u8>, HookBridgeError>>
+where
+    R: Read + Send + 'static,
+{
+    thread::spawn(move || {
+        let mut buffer = Vec::new();
+        reader
+            .read_to_end(&mut buffer)
+            .map_err(|error| HookBridgeError::Process {
+                message: format!("failed to read child {stream_name}: {error}"),
+            })?;
+        Ok(buffer)
+    })
+}
+
+fn collect_pipe_reader(
+    reader: Option<JoinHandle<Result<Vec<u8>, HookBridgeError>>>,
+    stream_name: &'static str,
+) -> Result<Vec<u8>, HookBridgeError> {
+    match reader {
+        Some(handle) => match handle.join() {
+            Ok(result) => result,
+            Err(_) => Err(HookBridgeError::Process {
+                message: format!("child {stream_name} reader thread panicked"),
+            }),
+        },
+        None => Ok(Vec::new()),
+    }
+}
+
+fn cleanup_child(
+    child: &mut Child,
+    stdout_reader: Option<JoinHandle<Result<Vec<u8>, HookBridgeError>>>,
+    stderr_reader: Option<JoinHandle<Result<Vec<u8>, HookBridgeError>>>,
+    terminate: bool,
+) {
+    if terminate {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    let _ = collect_pipe_reader(stdout_reader, "stdout");
+    let _ = collect_pipe_reader(stderr_reader, "stderr");
+}
+
+#[derive(Debug)]
+pub struct FakeProcessRunner {
+    status_code: i32,
+}
+
+impl FakeProcessRunner {
+    #[must_use]
+    pub fn success(status_code: i32) -> Self {
+        Self { status_code }
+    }
+}
+
+impl ProcessRunner for FakeProcessRunner {
+    fn run(&self, _request: &ProcessRequest) -> Result<ProcessOutput, HookBridgeError> {
+        Ok(ProcessOutput {
+            status_code: self.status_code,
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::time::Duration;
+
+    use super::{FakeProcessRunner, ProcessRequest, ProcessRunner};
+
+    #[test]
+    fn fake_process_runner_returns_injected_result() {
+        let runner = FakeProcessRunner::success(0);
+        let request = ProcessRequest {
+            program: "echo".to_string(),
+            args: vec!["ok".to_string()],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(1),
+            cwd: None,
+            env: BTreeMap::new(),
+        };
+
+        let result = runner.run(&request);
+
+        assert!(matches!(result, Ok(output) if output.status_code == 0));
+    }
+}

@@ -1,3 +1,6 @@
 # hook_bridge
 
-Minimal bridge binary for hook-driven workflows.
+## Commands
+
+- `make test`
+- `make coverage` (requires `cargo-llvm-cov`, line coverage gate: 95%)
