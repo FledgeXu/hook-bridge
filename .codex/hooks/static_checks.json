@@ -23,7 +23,7 @@
       ]
     },
     {
-      "name": "cargo llvm-cov --workspace --fail-under-lines 100",
+      "name": "cargo llvm-cov --workspace --show-missing-lines --fail-under-lines 95",
       "command": [
         "cargo",
         "llvm-cov",

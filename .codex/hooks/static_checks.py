@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-from contextlib import suppress
 import hashlib
 import json
 import subprocess
@@ -70,12 +69,6 @@ def block(reason: str) -> int:
     return emit({"decision": "block", "reason": reason})
 
 
-def block_once(cwd: str, turn_id: str, reason: str) -> int:
-    if turn_id:
-        mark_resumed_turn(cwd, turn_id)
-    return block(reason)
-
-
 def join_command(command: Sequence[str]) -> str:
     return " ".join(command)
 
@@ -83,39 +76,6 @@ def join_command(command: Sequence[str]) -> str:
 def state_dir(cwd: str) -> Path:
     key = hashlib.sha256(str(Path(cwd).resolve()).encode("utf-8")).hexdigest()[:16]
     return Path(tempfile.gettempdir()) / "codex-static-checks" / key
-
-
-def turn_marker_path(cwd: str, turn_id: str) -> Path:
-    key = hashlib.sha256(turn_id.encode("utf-8")).hexdigest()
-    return state_dir(cwd) / key
-
-
-def prune_state_dir(cwd: str) -> None:
-    with suppress(Exception):
-        state_dir(cwd).rmdir()
-
-
-def has_resumed_turn(cwd: str, turn_id: str) -> bool:
-    with suppress(OSError):
-        return turn_marker_path(cwd, turn_id).exists()
-    return False
-
-
-def mark_resumed_turn(cwd: str, turn_id: str) -> bool:
-    try:
-        path = turn_marker_path(cwd, turn_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with suppress(FileExistsError), path.open("x", encoding="utf-8") as handle:
-            handle.write("")
-    except OSError:
-        return False
-    return True
-
-
-def clear_resumed_turn(cwd: str, turn_id: str) -> None:
-    with suppress(OSError):
-        turn_marker_path(cwd, turn_id).unlink()
-    prune_state_dir(cwd)
 
 
 def load_checks() -> tuple[Check, ...]:
@@ -173,22 +133,11 @@ def run_check(cwd: str, name: str, command: Sequence[str]) -> str | None:
 def main() -> int:
     payload = json.load(sys.stdin)
     cwd = payload["cwd"]
-    turn_id = str(payload.get("turn_id") or "")
-    stop_hook_active = bool(payload.get("stop_hook_active"))
-
-    # `stop_hook_active` 是最终兜底；有 turn_id 时优先使用独立标记文件，避免共享状态冲突。
-    if stop_hook_active:
-        if turn_id:
-            clear_resumed_turn(cwd, turn_id)
-        return allow()
-    if turn_id and has_resumed_turn(cwd, turn_id):
-        clear_resumed_turn(cwd, turn_id)
-        return allow()
 
     try:
         checks = load_checks()
     except (ConfigError, ConfigTypeError) as exc:
-        return block_once(cwd, turn_id, str(exc))
+        return block(str(exc))
 
     failures = tuple(
         filter(
@@ -198,14 +147,9 @@ def main() -> int:
     )
 
     if not failures:
-        if turn_id:
-            clear_resumed_turn(cwd, turn_id)
         return allow()
 
-    # Stop hook 在 exit 0 时必须输出 JSON；返回 decision=block 会让 Codex 自动继续一轮
-    return block_once(
-        cwd,
-        turn_id,
+    return block(
         "请先执行并修复以下静态检查问题，然后再结束本轮任务。\n\n"
         f"检查输出：\n\n{'\n\n'.join(failures)}"
     )
