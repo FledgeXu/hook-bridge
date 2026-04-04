@@ -329,3 +329,34 @@ hooks:
         .code(3)
         .stderr(predicate::str::contains("config validation error"));
 }
+
+#[test]
+fn generate_command_maps_invalid_yaml_syntax_to_config_exit_code() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_config_result = fs::write(temp.path().join("hook-bridge.yaml"), "version: [\n");
+    assert!(write_config_result.is_ok(), "broken yaml should be written");
+
+    let command_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        command_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut command) = command_result else {
+        return;
+    };
+
+    command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains("config validation error"));
+}

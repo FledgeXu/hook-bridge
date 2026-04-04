@@ -1,4 +1,4 @@
-.PHONY: test coverage coverage-gate
+.PHONY: test coverage coverage-gate verify
 
 test:
 	cargo test --workspace
@@ -8,3 +8,8 @@ coverage:
 		--fail-under-lines 95 --summary-only
 
 coverage-gate: coverage
+
+verify:
+	cargo fmt --check
+	cargo clippy --all-targets --all-features -- -D warnings
+	$(MAKE) coverage-gate

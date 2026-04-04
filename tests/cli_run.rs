@@ -842,6 +842,186 @@ hooks:
 }
 
 #[test]
+fn retry_state_updates_consecutive_failure_count_across_runs() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let config_path = temp.path().join("hook-bridge.yaml");
+    let write_result = fs::write(
+        &config_path,
+        r"
+version: 1
+defaults:
+  max_retries: 3
+hooks:
+  - id: r_count
+    event: before_command
+    command: exit 1
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload = r#"{"hook_event_name":"before_command","session_id":"count_session","cwd":"."}"#;
+    let state_path = retry_state_path("codex", &config_path, "count_session", "r_count");
+
+    for expected_count in [1_u64, 2] {
+        let run_result = Command::cargo_bin("hook_bridge");
+        assert!(
+            run_result.is_ok(),
+            "binary should build for integration tests"
+        );
+        let Ok(mut run_command) = run_result else {
+            return;
+        };
+        run_command
+            .current_dir(temp.path())
+            .arg("run")
+            .arg("--platform")
+            .arg("codex")
+            .arg("--rule-id")
+            .arg("r_count")
+            .write_stdin(payload)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(r#""decision":"block""#));
+
+        let state_result = fs::read_to_string(&state_path);
+        assert!(
+            state_result.is_ok(),
+            "retry state should exist after failed run"
+        );
+        let Ok(state_json) = state_result else {
+            return;
+        };
+        let parsed_result = serde_json::from_str::<serde_json::Value>(&state_json);
+        assert!(parsed_result.is_ok(), "retry state should stay valid json");
+        let Ok(parsed) = parsed_result else {
+            return;
+        };
+
+        assert_eq!(
+            parsed.get("consecutive_failures"),
+            Some(&serde_json::Value::from(expected_count))
+        );
+        assert_eq!(
+            parsed.get("last_error"),
+            Some(&serde_json::Value::from(
+                "command exited with non-zero status 1"
+            ))
+        );
+    }
+
+    let cleanup_result = fs::remove_file(&state_path);
+    assert!(
+        cleanup_result.is_ok(),
+        "retry state fixture should be removable after test"
+    );
+}
+
+#[test]
+fn generate_to_run_round_trip_works_for_claude_native_protocol() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let config_path = temp.path().join("hook-bridge.yaml");
+    let write_result = fs::write(
+        &config_path,
+        r"
+version: 1
+defaults:
+  timeout_sec: 10
+hooks:
+  - id: r_claude_round_trip
+    event: before_command
+    command: cat > claude-payload.json
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let settings_result = fs::read_to_string(temp.path().join(".claude/settings.json"));
+    assert!(
+        settings_result.is_ok(),
+        "generated claude settings should be readable"
+    );
+    let Ok(settings) = settings_result else {
+        return;
+    };
+    assert!(
+        settings.contains("hook_bridge run --platform claude --rule-id r_claude_round_trip"),
+        "generated claude hook should point at the run command"
+    );
+
+    let payload = r#"{"hook_event_name":"PreToolUse","session_id":"claude_round_trip","cwd":"."}"#;
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("claude")
+        .arg("--rule-id")
+        .arg("r_claude_round_trip")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::is_empty());
+
+    let payload_result = fs::read_to_string(temp.path().join("claude-payload.json"));
+    assert!(
+        payload_result.is_ok(),
+        "claude command should receive the raw payload over stdin"
+    );
+    let Ok(persisted_payload) = payload_result else {
+        return;
+    };
+    assert_eq!(persisted_payload, payload);
+}
+
+#[test]
 fn claude_payload_uses_hook_event_name_and_block_decision_on_failure() {
     let temp_result = tempfile::tempdir();
     assert!(temp_result.is_ok(), "tempdir creation should succeed");
