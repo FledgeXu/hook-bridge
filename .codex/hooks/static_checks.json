@@ -1,0 +1,12 @@
+{
+  "checks": [
+    {
+      "name": "ruff",
+      "command": ["uv", "run", "ruff", "check", "."]
+    },
+    {
+      "name": "pyright",
+      "command": ["uv", "run", "pyright"]
+    }
+  ]
+}
