@@ -1,0 +1,46 @@
+version: 1
+
+defaults:
+  shell: sh
+  timeout_sec: 20
+
+hooks:
+  - id: claude.permission_request.policy
+    description: Return a native permission decision for Claude PermissionRequest events.
+    event: PermissionRequest
+    matcher: "Bash"
+    command: |
+      printf '%s\n' '{"hook_bridge":{"kind":"permission_decision","behavior":"deny","reason":"Interactive shell access is disabled in this workspace.","additional_context":"Use a non-interactive command or ask for approval."}}'
+    platforms:
+      codex:
+        enabled: false
+
+  - id: claude.elicitation.auto_reply
+    description: Answer a Claude elicitation request with structured content.
+    event: Elicitation
+    matcher: "code-review-bot"
+    command: |
+      printf '%s\n' '{"hook_bridge":{"kind":"elicitation_response","action":"submit","content":{"type":"text","text":"Please continue and include the failing test plus the minimal fix."}}}'
+    platforms:
+      codex:
+        enabled: false
+
+  - id: claude.subagent_stop.audit
+    description: Stop or block specific subagent completions with Claude-native stop semantics.
+    event: SubagentStop
+    matcher: "review-agent"
+    command: |
+      printf '%s\n' '{"hook_bridge":{"kind":"stop","reason":"Review agent output requires human inspection before merge."}}'
+    platforms:
+      codex:
+        enabled: false
+
+  - id: claude.teammate_idle.feedback
+    description: Emit teammate feedback when an idle worker needs intervention.
+    event: TeammateIdle
+    command: |
+      printf '%s\n' 'Teammate is idle; either assign a bounded task or close the worker.' >&2
+      exit 2
+    platforms:
+      codex:
+        enabled: false

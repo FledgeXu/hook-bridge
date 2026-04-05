@@ -5,37 +5,51 @@ defaults:
   timeout_sec: 15
 
 hooks:
-  - id: guard.shell.commands
-    description: Block risky shell commands and return native platform-specific messages.
+  - id: guard.destructive.commands
+    description: Block obviously destructive shell commands with platform-native messages.
     event: before_command
-    matcher: "^(rm|git\\s+reset|git\\s+checkout\\s+--)"
+    matcher: "^(rm(\\s+-[A-Za-z-]*[rf][A-Za-z-]*)?\\b|git\\s+reset\\s+--hard\\b|git\\s+checkout\\s+--\\b)"
     command: |
-      echo "dangerous command rejected"
+      printf '%s\n' 'dangerous command rejected by hook_bridge'
       exit 1
     platforms:
       claude:
         decision: block
-        reason: "Dangerous shell command rejected by hook_bridge."
+        reason: Dangerous shell command rejected by policy.
       codex:
-        continue: false
-        stopReason: "Dangerous shell command rejected by hook_bridge."
-        systemMessage: "Use a non-destructive command or ask for explicit approval."
+        systemMessage: Use a non-destructive command or ask for explicit approval.
 
-  - id: claude.only.session.banner
-    description: Emit a Claude-only session banner.
+  - id: context.session_banner
+    description: Emit session context text for both platforms using their supported output style.
     event: session_start
+    matcher: ".*"
     command: |
-      printf '%s\n' "Claude session started" >> .hook_bridge.claude.log
+      printf '%s\n' 'Repository policy loaded: avoid destructive git commands and write concise commit messages.'
+    platforms:
+      claude:
+        command: |
+          printf '%s\n' '{"hook_bridge":{"kind":"additional_context","text":"Repository policy loaded: avoid destructive git commands and write concise commit messages."}}'
+      codex:
+        command: |
+          printf '%s\n' 'Repository policy loaded: avoid destructive git commands and write concise commit messages.'
+
+  - id: claude.notification.audit
+    description: Claude-only notification matcher example.
+    event: Notification
+    matcher: "token-refresh"
+    command: |
+      mkdir -p .hook_bridge
+      printf '%s\n' 'Claude notification observed: token-refresh' >> .hook_bridge/claude-notifications.log
     platforms:
       codex:
         enabled: false
 
-  - id: codex.only.after.summary
-    description: Emit a Codex-only completion marker.
+  - id: codex.post_tool.summary
+    description: Codex-only post-tool context injection example.
     event: after_command
     matcher: ".*"
     command: |
-      printf '%s\n' "Codex command finished" >> .hook_bridge.codex.log
+      printf '%s\n' '{"hook_bridge":{"kind":"additional_context","text":"Summarize tool changes briefly and mention verification status."}}'
     platforms:
       claude:
         enabled: false

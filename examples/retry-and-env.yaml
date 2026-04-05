@@ -4,21 +4,26 @@ defaults:
   shell: sh
   timeout_sec: 20
   max_retries: 2
-  working_dir: .
 
 hooks:
-  - id: audit.command.payload
-    description: Persist each hook payload with merged common/platform environment variables.
+  - id: audit.payload.capture
+    description: Persist each hook payload with merged common and platform-specific environment.
     event: before_command
     matcher: ".*"
     command: |
-      mkdir -p .hook_bridge
-      cat > ".hook_bridge/${AUDIT_FILE}"
-      printf '%s\n' "platform=$HOOK_BRIDGE_PLATFORM" >> ".hook_bridge/${AUDIT_FILE}"
-      printf '%s\n' "rule=$HOOK_BRIDGE_RULE_ID" >> ".hook_bridge/${AUDIT_FILE}"
-      printf '%s\n' "tag=$AUDIT_TAG" >> ".hook_bridge/${AUDIT_FILE}"
+      mkdir -p .hook_bridge/audit
+      payload="$(cat)"
+      printf '%s\n' "$payload" >> ".hook_bridge/audit/${AUDIT_FILE}"
+      {
+        printf 'platform=%s\n' "$HOOK_BRIDGE_PLATFORM"
+        printf 'event=%s\n' "$HOOK_BRIDGE_EVENT"
+        printf 'rule=%s\n' "$HOOK_BRIDGE_RULE_ID"
+        printf 'tag=%s\n' "$AUDIT_TAG"
+        printf '%s\n' '--'
+      } >> ".hook_bridge/audit/${AUDIT_META_FILE}"
     env:
-      AUDIT_FILE: command-payload.jsonl
+      AUDIT_FILE: payload.jsonl
+      AUDIT_META_FILE: payload.meta.log
       AUDIT_TAG: common
     platforms:
       claude:
@@ -28,10 +33,20 @@ hooks:
         env:
           AUDIT_TAG: codex
 
-  - id: retry.flaky.after_command
-    description: Demonstrate per-rule retry override for flaky post-command checks.
+  - id: retry.flaky.post_tool
+    description: Demonstrate per-rule retry override for flaky post-tool checks.
     event: after_command
     matcher: ".*"
     command: |
       test -f .hook_bridge/retry-ready
     max_retries: 1
+
+  - id: custom.cwd.override
+    description: Run a hook from a fixed absolute working directory instead of the incoming hook cwd.
+    event: before_command
+    matcher: ".*"
+    working_dir: /tmp
+    env:
+      AUDIT_FILE: cwd-check.txt
+    command: |
+      pwd > "$AUDIT_FILE"

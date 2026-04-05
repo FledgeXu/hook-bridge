@@ -6,22 +6,33 @@ defaults:
   max_retries: 0
 
 hooks:
-  - id: log.before_command
-    description: Log every tool invocation before execution.
+  - id: log.session_start
+    description: Record each new session or thread start.
+    event: session_start
+    matcher: ".*"
+    command: |
+      mkdir -p .hook_bridge
+      printf '%s\t%s\t%s\n' \
+        "$HOOK_BRIDGE_PLATFORM" \
+        "$HOOK_BRIDGE_EVENT" \
+        "$HOOK_BRIDGE_RULE_ID" >> .hook_bridge/session-start.log
+
+  - id: log.pre_tool
+    description: Append each raw hook payload before the tool runs.
     event: before_command
     matcher: ".*"
     command: |
-      printf '%s\n' "[before_command] $HOOK_BRIDGE_RULE_ID" >> .hook_bridge.log
+      mkdir -p .hook_bridge/pre-tool
+      payload="$(cat)"
+      printf '%s\n' "$payload" >> ".hook_bridge/pre-tool/${HOOK_BRIDGE_PLATFORM}-${HOOK_BRIDGE_RULE_ID}.jsonl"
 
-  - id: log.after_command
-    description: Log every tool invocation after execution.
+  - id: log.post_tool
+    description: Append a lightweight audit line after each tool finishes.
     event: after_command
     matcher: ".*"
     command: |
-      printf '%s\n' "[after_command] $HOOK_BRIDGE_RULE_ID" >> .hook_bridge.log
-
-  - id: log.session_start
-    description: Record new agent sessions.
-    event: session_start
-    command: |
-      printf '%s\n' "[session_start] $HOOK_BRIDGE_RULE_ID" >> .hook_bridge.log
+      mkdir -p .hook_bridge
+      printf '%s\t%s\t%s\n' \
+        "$HOOK_BRIDGE_PLATFORM" \
+        "$HOOK_BRIDGE_EVENT" \
+        "$HOOK_BRIDGE_RULE_ID" >> .hook_bridge/post-tool.log

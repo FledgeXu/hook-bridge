@@ -1,0 +1,24 @@
+version: 1
+
+defaults:
+  shell: sh
+  timeout_sec: 15
+
+hooks:
+  - id: claude.stop.review_gate
+    description: Claude stop hook that halts shutdown until a final review note is acknowledged.
+    event: Stop
+    command: |
+      printf '%s\n' '{"hook_bridge":{"kind":"stop","reason":"Final review note is still pending."}}'
+    platforms:
+      codex:
+        enabled: false
+
+  - id: codex.stop.summary_gate
+    description: Codex stop hook that blocks exit until a concise summary is added.
+    event: Stop
+    command: |
+      printf '%s\n' '{"hook_bridge":{"kind":"stop","reason":"Add a short final summary before stopping.","system_message":"Summarize changed files and verification status before exit."}}'
+    platforms:
+      claude:
+        enabled: false
