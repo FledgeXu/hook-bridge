@@ -1,3 +1,4 @@
+# Stop-event responses for Claude and Codex with native stop semantics.
 version: 1
 
 defaults:

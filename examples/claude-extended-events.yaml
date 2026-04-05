@@ -1,3 +1,4 @@
+# Claude-only native event examples that do not exist on Codex.
 version: 1
 
 defaults:
@@ -6,7 +7,7 @@ defaults:
 
 hooks:
   - id: claude.permission_request.policy
-    description: Return a native permission decision for Claude PermissionRequest events.
+    description: Return a native permission decision for Claude permission requests.
     event: PermissionRequest
     matcher: "Bash"
     command: |
@@ -16,7 +17,7 @@ hooks:
         enabled: false
 
   - id: claude.elicitation.auto_reply
-    description: Answer a Claude elicitation request with structured content.
+    description: Answer an elicitation request with structured text content.
     event: Elicitation
     matcher: "code-review-bot"
     command: |
@@ -25,8 +26,19 @@ hooks:
       codex:
         enabled: false
 
+  - id: claude.notification.audit
+    description: Audit a specific Claude notification type without affecting control flow.
+    event: Notification
+    matcher: "token-refresh"
+    command: |
+      mkdir -p .hook_bridge
+      printf '%s\n' 'Claude notification observed: token-refresh' >> .hook_bridge/claude-notifications.log
+    platforms:
+      codex:
+        enabled: false
+
   - id: claude.subagent_stop.audit
-    description: Stop or block specific subagent completions with Claude-native stop semantics.
+    description: Stop a specific subagent completion until a human reviews it.
     event: SubagentStop
     matcher: "review-agent"
     command: |

@@ -1,3 +1,4 @@
+# Merged environment variables, retry settings, and fixed working directory behavior.
 version: 1
 
 defaults:
@@ -7,7 +8,7 @@ defaults:
 
 hooks:
   - id: audit.payload.capture
-    description: Persist each hook payload with merged common and platform-specific environment.
+    description: Persist each hook payload with merged shared and platform-specific env values.
     event: before_command
     matcher: ".*"
     command: |
@@ -34,7 +35,7 @@ hooks:
           AUDIT_TAG: codex
 
   - id: retry.flaky.post_tool
-    description: Demonstrate per-rule retry override for flaky post-tool checks.
+    description: Demonstrate a per-rule retry override for a flaky post-tool check.
     event: after_command
     matcher: ".*"
     command: |
@@ -42,7 +43,7 @@ hooks:
     max_retries: 1
 
   - id: custom.cwd.override
-    description: Run a hook from a fixed absolute working directory instead of the incoming hook cwd.
+    description: Run a hook from a fixed absolute directory instead of the incoming payload cwd.
     event: before_command
     matcher: ".*"
     working_dir: /tmp

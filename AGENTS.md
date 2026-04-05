@@ -14,6 +14,10 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 ## Maintain by Robot
 
 ### File Index And Description
+- `README.md`: End-to-end user guide covering install, generate/run flow, schema, events, structured outputs, retry behavior, managed file safety, and example usage.
+- `hook-bridge.yaml`: Local hook configuration that runs the stop-event verification and automated review gates for this repository.
+- `examples/basic.yaml`: Basic shared hooks for session start plus pre/post tool logging.
+- `examples/claude-extended-events.yaml`: Claude-only native event examples for permission decisions, elicitation replies, notifications, subagent stop control, and teammate-idle feedback.
 - `src/app.rs`: Application command dispatch, runtime abstraction wiring, and app-level routing tests.
 - `src/cli.rs`: CLI argument definitions, including the default `hook-bridge.yaml` config path and optional single-platform filter for `generate`.
 - `src/config/schema.rs`: YAML schema definitions for top-level defaults, hooks, and platform overrides.
@@ -47,4 +51,6 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - `tests/cli_run/platform_outputs.rs`: `run` integration tests for Claude/Codex protocol translations and payload validation.
 - `tests/cli_run/retry_state.rs`: `run` integration tests for retry-state isolation, persistence, and translate-time failure tracking.
 - `tests/cli_run/stop_and_feedback.rs`: `run` integration tests for stop-event summaries and Claude exit-code-two feedback behavior.
-- `examples/platform-overrides.yaml`: Example config showing platform overrides and shared hook fields like `status_message`.
+- `examples/platform-overrides.yaml`: Shared-hook example showing Claude/Codex-specific commands, protocol overrides, and disabled platform mappings.
+- `examples/retry-and-env.yaml`: Example config demonstrating merged environment variables, retry overrides, and absolute working directory behavior.
+- `examples/stop-hooks.yaml`: Platform-specific stop-event examples for Claude and Codex native stop responses.

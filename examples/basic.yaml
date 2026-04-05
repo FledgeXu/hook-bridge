@@ -1,3 +1,4 @@
+# Basic shared hooks for session start plus pre/post tool logging.
 version: 1
 
 defaults:
@@ -7,7 +8,7 @@ defaults:
 
 hooks:
   - id: log.session_start
-    description: Record each new session or thread start.
+    description: Record each new session or thread start in a compact audit log.
     event: session_start
     matcher: ".*"
     command: |
@@ -18,7 +19,7 @@ hooks:
         "$HOOK_BRIDGE_RULE_ID" >> .hook_bridge/session-start.log
 
   - id: log.pre_tool
-    description: Append each raw hook payload before the tool runs.
+    description: Persist each pre-tool payload for later debugging.
     event: before_command
     matcher: ".*"
     command: |
@@ -27,7 +28,7 @@ hooks:
       printf '%s\n' "$payload" >> ".hook_bridge/pre-tool/${HOOK_BRIDGE_PLATFORM}-${HOOK_BRIDGE_RULE_ID}.jsonl"
 
   - id: log.post_tool
-    description: Append a lightweight audit line after each tool finishes.
+    description: Append a lightweight post-tool audit entry.
     event: after_command
     matcher: ".*"
     command: |
