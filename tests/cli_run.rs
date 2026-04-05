@@ -5,6 +5,12 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use sha2::{Digest, Sha256};
 
+fn parse_stdout_json(output: &[u8]) -> serde_json::Value {
+    let parse_result = serde_json::from_slice(output);
+    assert!(parse_result.is_ok(), "stdout should be valid json");
+    parse_result.unwrap_or_else(|_| unreachable!())
+}
+
 fn retry_state_path(
     platform: &str,
     source_config_path: &Path,
@@ -925,7 +931,7 @@ hooks:
         assert_eq!(
             parsed.get("last_error"),
             Some(&serde_json::Value::from(
-                "command failed with exit code 1: exit 1"
+                "Command failed with exit code 1.\n\nCommand:\nexit 1"
             ))
         );
     }
@@ -1483,7 +1489,7 @@ hooks:
     let Ok(mut run_command) = run_result else {
         return;
     };
-    run_command
+    let assert = run_command
         .current_dir(temp.path())
         .arg("run")
         .arg("--platform")
@@ -1492,13 +1498,33 @@ hooks:
         .arg("r_fail_json")
         .write_stdin(payload)
         .assert()
-        .success()
-        .stdout(predicate::str::contains(r#""decision":"block""#))
-        .stdout(predicate::str::contains("command failed with exit code 9"))
-        .stdout(predicate::str::contains(r"stderr (tail):").not())
-        .stdout(predicate::str::contains("stdout (tail):"))
-        .stdout(predicate::str::contains("cat <<'EOF'"))
-        .stdout(predicate::str::contains("ignore me"));
+        .success();
+    let output = parse_stdout_json(&assert.get_output().stdout);
+    assert_eq!(
+        output.get("decision"),
+        Some(&serde_json::Value::from("block"))
+    );
+    let reason = output.get("reason").and_then(serde_json::Value::as_str);
+    assert!(
+        reason.is_some_and(|value| value.contains("Command failed with exit code 9.")),
+        "reason should include the failure header"
+    );
+    assert!(
+        reason.is_some_and(|value| value.contains("Command:\ncat <<'EOF'")),
+        "reason should include the command block"
+    );
+    assert!(
+        reason.is_some_and(|value| {
+            value.contains(
+                "stdout (tail):\n{\"hook_bridge\":{\"kind\":\"additional_context\",\"text\":\"ignore me\"}}"
+            )
+        }),
+        "reason should include the stdout tail contents"
+    );
+    assert!(
+        reason.is_some_and(|value| !value.contains("stderr (tail):")),
+        "reason should omit stderr when stderr is empty"
+    );
 }
 
 #[test]
@@ -1552,7 +1578,7 @@ hooks:
     let Ok(mut run_command) = run_result else {
         return;
     };
-    run_command
+    let assert = run_command
         .current_dir(temp.path())
         .arg("run")
         .arg("--platform")
@@ -1561,13 +1587,41 @@ hooks:
         .arg("stop_fail")
         .write_stdin(payload)
         .assert()
-        .success()
-        .stdout(predicate::str::contains(r#""decision":"block""#))
-        .stdout(predicate::str::contains(
-            r#""reason":"command failed with exit code 2:"#,
-        ))
-        .stdout(predicate::str::contains("running make verify wrapper"))
-        .stdout(predicate::str::contains("cargo clippy failed"));
+        .success();
+    let output = parse_stdout_json(&assert.get_output().stdout);
+    assert_eq!(
+        output.get("decision"),
+        Some(&serde_json::Value::from("block"))
+    );
+    let reason = output.get("reason").and_then(serde_json::Value::as_str);
+    assert!(
+        reason.is_some_and(|value| value.contains("Command failed with exit code 2.")),
+        "reason should include the failure header"
+    );
+    assert!(
+        reason.is_some_and(|value| {
+            value.contains(
+                "Command:\necho running make verify wrapper\necho cargo clippy failed >&2\nexit 2",
+            )
+        }),
+        "reason should include the command block"
+    );
+    assert!(
+        reason.is_some_and(|value| value.contains("stderr (tail):\ncargo clippy failed")),
+        "reason should include the stderr tail contents"
+    );
+    assert!(
+        reason.is_some_and(|value| value.contains("stdout (tail):\nrunning make verify wrapper")),
+        "reason should include the stdout tail contents"
+    );
+    let stderr_index = reason.and_then(|value| value.find("stderr (tail):"));
+    let stdout_index = reason.and_then(|value| value.find("stdout (tail):"));
+    assert!(stderr_index.is_some(), "stderr tail should be present");
+    assert!(stdout_index.is_some(), "stdout tail should be present");
+    assert!(
+        stderr_index < stdout_index,
+        "stderr tail should appear before stdout tail"
+    );
 }
 
 #[test]
@@ -1759,6 +1813,6 @@ hooks:
         .assert()
         .success()
         .stdout(predicate::str::contains(r#""decision":"block""#))
-        .stdout(predicate::str::contains("command failed with exit code 2"))
+        .stdout(predicate::str::contains("Command failed with exit code 2."))
         .stderr(predicate::str::is_empty());
 }

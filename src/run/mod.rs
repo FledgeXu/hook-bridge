@@ -253,18 +253,19 @@ fn format_non_zero_exit_summary(
     stdout: &[u8],
     stderr: &[u8],
 ) -> String {
-    let mut summary = format!("command failed with exit code {exit_code}: {command}");
+    let mut sections = vec![
+        format!("Command failed with exit code {exit_code}."),
+        format!("Command:\n{command}"),
+    ];
 
     if let Some(stderr_summary) = summarize_output_stream("stderr", stderr) {
-        summary.push_str("\n\n");
-        summary.push_str(&stderr_summary);
+        sections.push(stderr_summary);
     }
     if let Some(stdout_summary) = summarize_output_stream("stdout", stdout) {
-        summary.push_str("\n\n");
-        summary.push_str(&stdout_summary);
+        sections.push(stdout_summary);
     }
 
-    summary
+    sections.join("\n\n")
 }
 
 fn summarize_output_stream(label: &str, bytes: &[u8]) -> Option<String> {

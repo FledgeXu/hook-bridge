@@ -887,8 +887,7 @@ fn run_user_command_maps_non_zero_exit_to_block_result() {
     assert_eq!(
         result.as_ref().map(|value| value.message.clone()),
         Ok(Some(
-            "command failed with exit code 23: echo ok\n\nstderr (tail):\nerr\n\nstdout (tail):\nout"
-                .to_string()
+            "Command failed with exit code 23.\n\nCommand:\necho ok\n\nstderr (tail):\nerr\n\nstdout (tail):\nout".to_string()
         ))
     );
     assert_eq!(
@@ -906,7 +905,8 @@ fn format_non_zero_exit_summary_prefers_stderr_then_stdout_tail() {
         b"stderr line 1\nstderr line 2\n",
     );
 
-    assert!(summary.contains("command failed with exit code 2: make verify"));
+    assert!(summary.starts_with("Command failed with exit code 2."));
+    assert!(summary.contains("\n\nCommand:\nmake verify"));
     let stderr_index = summary.find("stderr (tail):\nstderr line 1\nstderr line 2");
     let stdout_index = summary.find("stdout (tail):\nstdout line 1\nstdout line 2");
     assert!(stderr_index.is_some(), "stderr summary should be included");
