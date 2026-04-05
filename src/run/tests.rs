@@ -15,10 +15,10 @@ use crate::runtime::io::{FakeIo, Io};
 use crate::runtime::process::{FakeProcessRunner, ProcessOutput, ProcessRequest, ProcessRunner};
 
 use super::{
-    ExecutionResult, InternalStatus, RetryState, RuntimeContext, command_env, execute,
-    execute_rule, load_retry_state, now_epoch_sec, parse_runtime_context, persist_retry_state,
-    retry_guard_engaged, retry_guard_result, retry_state_path, run_user_command, translate_output,
-    update_retry_state,
+    BridgeOutput, ExecutionResult, InternalStatus, RetryState, RuntimeContext, command_env,
+    execute, execute_rule, load_retry_state, now_epoch_sec, parse_runtime_context,
+    persist_retry_state, retry_guard_engaged, retry_guard_result, retry_state_path,
+    run_user_command, translate_output, update_retry_state,
 };
 
 struct TestRuntime {
@@ -230,7 +230,7 @@ impl Runtime for RecordingRuntime {
 
 fn sample_rule() -> PlatformRule {
     PlatformRule {
-        event: "before_command".to_string(),
+        event: "PreToolUse".to_string(),
         command: "echo ok".to_string(),
         matcher: None,
         shell: "sh".to_string(),
@@ -252,7 +252,7 @@ fn sample_context() -> RuntimeContext {
     RuntimeContext {
         platform: Platform::Codex,
         raw_event: "PreToolUse".to_string(),
-        event: "before_command".to_string(),
+        event: "PreToolUse".to_string(),
         rule_id: "r1".to_string(),
         source_config_path: "/tmp/cfg.yaml".into(),
         session_or_thread_id: "t1".to_string(),
@@ -272,7 +272,7 @@ fn parse_context_works_for_codex_shape() {
     let context = parse_runtime_context(&args, payload, Path::new("/tmp/cfg.yaml"));
     assert_eq!(
         context.as_ref().map(|value| value.event.as_str()),
-        Ok("before_command")
+        Ok("PreToolUse")
     );
     assert_eq!(
         context.as_ref().map(|value| value.raw_event.as_str()),
@@ -297,7 +297,7 @@ fn parse_context_preserves_raw_native_event_for_platform_output() {
 
     assert_eq!(
         context.as_ref().map(|value| value.event.as_str()),
-        Ok("before_command")
+        Ok("PreToolUse")
     );
     assert_eq!(
         context.as_ref().map(|value| value.raw_event.as_str()),
@@ -343,8 +343,8 @@ fn parse_context_rejects_payload_event_not_supported_by_selected_platform() {
 fn retry_key_is_stable_for_platform_session_and_rule() {
     let context = RuntimeContext {
         platform: Platform::Claude,
-        raw_event: "before_command".to_string(),
-        event: "before_command".to_string(),
+        raw_event: "PreToolUse".to_string(),
+        event: "PreToolUse".to_string(),
         rule_id: "rule_1".to_string(),
         source_config_path: "/tmp/custom/cfg.yaml".into(),
         session_or_thread_id: "session_1".to_string(),
@@ -376,8 +376,8 @@ fn retry_key_is_isolated_by_source_config_path() {
     };
     let context_a = RuntimeContext {
         platform: Platform::Codex,
-        raw_event: "before_command".to_string(),
-        event: "before_command".to_string(),
+        raw_event: "PreToolUse".to_string(),
+        event: "PreToolUse".to_string(),
         rule_id: "rule_same".to_string(),
         source_config_path: "/repo_a/hook-bridge.yaml".into(),
         session_or_thread_id: "thread_same".to_string(),
@@ -387,8 +387,8 @@ fn retry_key_is_isolated_by_source_config_path() {
     };
     let context_b = RuntimeContext {
         platform: Platform::Codex,
-        raw_event: "before_command".to_string(),
-        event: "before_command".to_string(),
+        raw_event: "PreToolUse".to_string(),
+        event: "PreToolUse".to_string(),
         rule_id: "rule_same".to_string(),
         source_config_path: "/repo_b/hook-bridge.yaml".into(),
         session_or_thread_id: "thread_same".to_string(),
@@ -448,19 +448,19 @@ fn test_runtime_exposes_all_dependencies() {
 fn normalize_event_name_accepts_native_and_unified_values() {
     assert_eq!(
         normalize_event_name(Platform::Codex, "PreToolUse"),
-        Some("before_command")
+        Some("PreToolUse")
     );
     assert_eq!(
         normalize_event_name(Platform::Claude, "PostToolUse"),
-        Some("after_command")
+        Some("PostToolUse")
     );
     assert_eq!(
         normalize_event_name(Platform::Codex, "SessionStart"),
-        Some("session_start")
+        Some("SessionStart")
     );
     assert_eq!(
         normalize_event_name(Platform::Claude, "before_command"),
-        Some("before_command")
+        Some("PreToolUse")
     );
     assert_eq!(normalize_event_name(Platform::Codex, "Notification"), None);
 }
@@ -624,7 +624,7 @@ fn execute_rejects_event_mismatch() {
             &runtime,
         ),
         Err(crate::error::HookBridgeError::PlatformProtocol {
-            message: "event mismatch for rule 'r1': stdin event 'after_command' but configured event 'before_command'".to_string(),
+            message: "event mismatch for rule 'r1': stdin event 'PostToolUse' but configured event 'PreToolUse'".to_string(),
         })
     );
 }
@@ -660,8 +660,8 @@ fn execute_short_circuits_when_retry_guard_is_engaged() {
     };
     let context = RuntimeContext {
         platform: Platform::Codex,
-        raw_event: "before_command".to_string(),
-        event: "before_command".to_string(),
+        raw_event: "PreToolUse".to_string(),
+        event: "PreToolUse".to_string(),
         rule_id: "r1".to_string(),
         source_config_path: config_path.clone(),
         session_or_thread_id: "t1".to_string(),
@@ -691,7 +691,7 @@ fn execute_short_circuits_when_retry_guard_is_engaged() {
             },
             &runtime,
         ),
-        Ok(())
+        Ok(0)
     );
     assert!(
         String::from_utf8(runtime.io.stdout.borrow().clone())
@@ -748,8 +748,8 @@ fn helper_functions_cover_error_and_output_paths() {
     };
     let context = RuntimeContext {
         platform: Platform::Codex,
-        raw_event: "before_command".to_string(),
-        event: "before_command".to_string(),
+        raw_event: "PreToolUse".to_string(),
+        event: "PreToolUse".to_string(),
         rule_id: "r1".to_string(),
         source_config_path: "/tmp/cfg.yaml".into(),
         session_or_thread_id: "t1".to_string(),
@@ -779,6 +779,7 @@ fn helper_functions_cover_error_and_output_paths() {
                 exit_code: Some(1),
                 raw_stdout: Vec::new(),
                 raw_stderr: Vec::new(),
+                bridge_output: None,
             },
         )
         .map(|output| {
@@ -806,7 +807,7 @@ fn command_env_injects_bridge_metadata_over_user_values() {
     assert_eq!(env.get("HOOK_BRIDGE_RULE_ID"), Some(&"r1".to_string()));
     assert_eq!(
         env.get("HOOK_BRIDGE_EVENT"),
-        Some(&"before_command".to_string())
+        Some(&"PreToolUse".to_string())
     );
 }
 
@@ -829,9 +830,18 @@ fn run_user_command_passes_stdin_cwd_timeout_and_env_to_process_runner() {
     let requests = runtime.process.requests.borrow();
     let request = requests.first();
 
-    assert_eq!(result.status, InternalStatus::Success);
-    assert_eq!(result.raw_stdout, b"out".to_vec());
-    assert_eq!(result.raw_stderr, b"err".to_vec());
+    assert_eq!(
+        result.as_ref().map(|value| value.status),
+        Ok(InternalStatus::Success)
+    );
+    assert_eq!(
+        result.as_ref().map(|value| value.raw_stdout.clone()),
+        Ok(b"out".to_vec())
+    );
+    assert_eq!(
+        result.as_ref().map(|value| value.raw_stderr.clone()),
+        Ok(b"err".to_vec())
+    );
     assert!(request.is_some(), "process request should be recorded");
     let Some(request) = request else {
         return;
@@ -868,15 +878,20 @@ fn run_user_command_maps_non_zero_exit_to_block_result() {
 
     let result = run_user_command(&runtime, &sample_rule(), &sample_context());
 
-    assert_eq!(result.status, InternalStatus::Block);
-    assert_eq!(result.exit_code, Some(23));
     assert_eq!(
-        result.message,
-        Some("command exited with non-zero status 23".to_string())
+        result.as_ref().map(|value| value.status),
+        Ok(InternalStatus::Block)
+    );
+    assert_eq!(result.as_ref().map(|value| value.exit_code), Ok(Some(23)));
+    assert_eq!(
+        result.as_ref().map(|value| value.message.clone()),
+        Ok(Some("command exited with non-zero status 23".to_string()))
     );
     assert_eq!(
-        result.system_message,
-        Some("hook_bridge command returned non-zero exit code".to_string())
+        result.as_ref().map(|value| value.system_message.clone()),
+        Ok(Some(
+            "hook_bridge command returned non-zero exit code".to_string()
+        ))
     );
 }
 
@@ -897,9 +912,289 @@ fn run_user_command_maps_spawn_and_timeout_errors_to_error_result() {
 
     let result = run_user_command(&runtime, &sample_rule(), &sample_context());
 
-    assert_eq!(result.status, InternalStatus::Error);
-    assert_eq!(result.exit_code, Some(1));
-    assert_eq!(result.message, Some("timeout after 3s".to_string()));
+    assert_eq!(
+        result.as_ref().map(|value| value.status),
+        Ok(InternalStatus::Error)
+    );
+    assert_eq!(result.as_ref().map(|value| value.exit_code), Ok(Some(1)));
+    assert_eq!(
+        result.as_ref().map(|value| value.message.clone()),
+        Ok(Some("timeout after 3s".to_string()))
+    );
+}
+
+#[test]
+fn run_user_command_parses_structured_bridge_output() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+    let runtime = RecordingRuntime {
+        fs: OsFileSystem,
+        clock: FixedClock::new(std::time::UNIX_EPOCH),
+        process: RecordingProcessRunner::success(
+            0,
+            br#"{"hook_bridge":{"kind":"additional_context","text":"read docs"}}"#,
+            b"",
+        ),
+        io: CapturingIo::default(),
+        tmp: temp.path().to_path_buf(),
+    };
+
+    let result = run_user_command(&runtime, &sample_rule(), &sample_context());
+
+    assert_eq!(
+        result.as_ref().map(|value| value.bridge_output.clone()),
+        Ok(Some(BridgeOutput::AdditionalContext {
+            text: "read docs".to_string()
+        }))
+    );
+    assert_eq!(
+        result.as_ref().map(|value| value.status),
+        Ok(InternalStatus::Success)
+    );
+}
+
+#[test]
+fn run_user_command_ignores_structured_stdout_on_non_zero_exit() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+    let runtime = RecordingRuntime {
+        fs: OsFileSystem,
+        clock: FixedClock::new(std::time::UNIX_EPOCH),
+        process: RecordingProcessRunner::success(
+            7,
+            br#"{"hook_bridge":{"kind":"additional_context","text":"should not win"}}"#,
+            b"err",
+        ),
+        io: CapturingIo::default(),
+        tmp: temp.path().to_path_buf(),
+    };
+
+    let result = run_user_command(&runtime, &sample_rule(), &sample_context());
+
+    assert_eq!(
+        result.as_ref().map(|value| value.status),
+        Ok(InternalStatus::Block)
+    );
+    assert_eq!(
+        result.as_ref().map(|value| value.bridge_output.clone()),
+        Ok(None)
+    );
+    assert_eq!(result.as_ref().map(|value| value.exit_code), Ok(Some(7)));
+}
+
+#[test]
+fn run_user_command_rejects_invalid_bridge_kinds_and_missing_fields() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let invalid_kind_runtime = RecordingRuntime {
+        fs: OsFileSystem,
+        clock: FixedClock::new(std::time::UNIX_EPOCH),
+        process: RecordingProcessRunner::success(0, br#"{"hook_bridge":{"kind":"wat"}} "#, b""),
+        io: CapturingIo::default(),
+        tmp: temp.path().to_path_buf(),
+    };
+    assert!(matches!(
+        run_user_command(&invalid_kind_runtime, &sample_rule(), &sample_context()),
+        Err(HookBridgeError::PlatformProtocol { .. })
+    ));
+
+    let missing_field_runtime = RecordingRuntime {
+        fs: OsFileSystem,
+        clock: FixedClock::new(std::time::UNIX_EPOCH),
+        process: RecordingProcessRunner::success(
+            0,
+            br#"{"hook_bridge":{"kind":"worktree_path"}} "#,
+            b"",
+        ),
+        io: CapturingIo::default(),
+        tmp: temp.path().to_path_buf(),
+    };
+    assert!(matches!(
+        run_user_command(&missing_field_runtime, &sample_rule(), &sample_context()),
+        Err(HookBridgeError::PlatformProtocol { .. })
+    ));
+}
+
+#[test]
+fn run_user_command_maps_structured_bridge_variants_to_internal_results() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let cases = [
+        (
+            br#"{"hook_bridge":{"kind":"block","reason":"no"}} "#.as_slice(),
+            InternalStatus::Block,
+        ),
+        (
+            br#"{"hook_bridge":{"kind":"stop","reason":"later"}} "#.as_slice(),
+            InternalStatus::Stop,
+        ),
+        (
+            br#"{"hook_bridge":{"kind":"permission_decision","behavior":"deny","reason":"blocked","additional_context":"ctx","updated_input":{"cmd":"safe"}}}"#
+                .as_slice(),
+            InternalStatus::Success,
+        ),
+        (
+            br#"{"hook_bridge":{"kind":"permission_retry","reason":"retry"}} "#.as_slice(),
+            InternalStatus::Success,
+        ),
+        (
+            br#"{"hook_bridge":{"kind":"worktree_path","path":"/tmp/wt"}} "#.as_slice(),
+            InternalStatus::Success,
+        ),
+        (
+            br#"{"hook_bridge":{"kind":"elicitation_response","action":"accept","content":{"v":"x"}}}"#
+                .as_slice(),
+            InternalStatus::Success,
+        ),
+        (
+            br#"{"hook_bridge":{"kind":"error","message":"bad","system_message":"bridge"}} "#.as_slice(),
+            InternalStatus::Error,
+        ),
+    ];
+
+    for (stdout, expected_status) in cases {
+        let runtime = RecordingRuntime {
+            fs: OsFileSystem,
+            clock: FixedClock::new(std::time::UNIX_EPOCH),
+            process: RecordingProcessRunner::success(0, stdout, b""),
+            io: CapturingIo::default(),
+            tmp: temp.path().to_path_buf(),
+        };
+
+        let result = run_user_command(&runtime, &sample_rule(), &sample_context());
+        assert_eq!(
+            result.as_ref().map(|value| value.status),
+            Ok(expected_status),
+            "structured stdout should map to expected status"
+        );
+        assert!(
+            result
+                .as_ref()
+                .ok()
+                .and_then(|value| value.bridge_output.as_ref())
+                .is_some(),
+            "bridge output should be captured"
+        );
+    }
+}
+
+#[test]
+fn run_user_command_ignores_non_bridge_json_stdout() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+    let runtime = RecordingRuntime {
+        fs: OsFileSystem,
+        clock: FixedClock::new(std::time::UNIX_EPOCH),
+        process: RecordingProcessRunner::success(0, br#"{"plain":"json"}"#, b""),
+        io: CapturingIo::default(),
+        tmp: temp.path().to_path_buf(),
+    };
+
+    let result = run_user_command(&runtime, &sample_rule(), &sample_context());
+    assert_eq!(
+        result.as_ref().map(|value| value.status),
+        Ok(InternalStatus::Success)
+    );
+    assert_eq!(
+        result.as_ref().map(|value| value.bridge_output.clone()),
+        Ok(None)
+    );
+}
+
+#[test]
+fn run_user_command_promotes_plaintext_stdout_to_codex_additional_context() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+    let runtime = RecordingRuntime {
+        fs: OsFileSystem,
+        clock: FixedClock::new(std::time::UNIX_EPOCH),
+        process: RecordingProcessRunner::success(0, b"Load workspace conventions.\n", b""),
+        io: CapturingIo::default(),
+        tmp: temp.path().to_path_buf(),
+    };
+    let context = RuntimeContext {
+        platform: Platform::Codex,
+        raw_event: "SessionStart".to_string(),
+        event: "SessionStart".to_string(),
+        rule_id: "r1".to_string(),
+        source_config_path: "/tmp/cfg.yaml".into(),
+        session_or_thread_id: "t1".to_string(),
+        cwd: None,
+        transcript_path: None,
+        raw_payload: "{}".to_string(),
+    };
+    let rule = PlatformRule {
+        event: "SessionStart".to_string(),
+        ..sample_rule()
+    };
+
+    let result = run_user_command(&runtime, &rule, &context);
+    assert_eq!(
+        result.as_ref().map(|value| value.status),
+        Ok(InternalStatus::Success)
+    );
+    assert_eq!(
+        result.as_ref().map(|value| value.bridge_output.clone()),
+        Ok(Some(BridgeOutput::AdditionalContext {
+            text: "Load workspace conventions.".to_string()
+        }))
+    );
+}
+
+#[test]
+fn run_user_command_rejects_plaintext_stdout_for_codex_stop() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+    let runtime = RecordingRuntime {
+        fs: OsFileSystem,
+        clock: FixedClock::new(std::time::UNIX_EPOCH),
+        process: RecordingProcessRunner::success(0, b"keep-going\n", b""),
+        io: CapturingIo::default(),
+        tmp: temp.path().to_path_buf(),
+    };
+    let context = RuntimeContext {
+        platform: Platform::Codex,
+        raw_event: "Stop".to_string(),
+        event: "Stop".to_string(),
+        rule_id: "r1".to_string(),
+        source_config_path: "/tmp/cfg.yaml".into(),
+        session_or_thread_id: "t1".to_string(),
+        cwd: None,
+        transcript_path: None,
+        raw_payload: "{}".to_string(),
+    };
+    let rule = PlatformRule {
+        event: "Stop".to_string(),
+        ..sample_rule()
+    };
+
+    assert!(matches!(
+        run_user_command(&runtime, &rule, &context),
+        Err(HookBridgeError::PlatformProtocol { .. })
+    ));
 }
 
 #[test]
@@ -949,6 +1244,7 @@ fn update_retry_state_clears_success_persists_failures_and_ignores_stop() {
                 exit_code: Some(0),
                 raw_stdout: Vec::new(),
                 raw_stderr: Vec::new(),
+                bridge_output: None,
             }
         ),
         Ok(())
@@ -967,6 +1263,7 @@ fn update_retry_state_clears_success_persists_failures_and_ignores_stop() {
                 exit_code: Some(2),
                 raw_stdout: Vec::new(),
                 raw_stderr: Vec::new(),
+                bridge_output: None,
             }
         ),
         Ok(())
@@ -1059,4 +1356,70 @@ fn execute_rule_creates_retry_state_and_clears_it_after_later_success() {
         })
     ));
     assert_eq!(success_runtime.fs().exists(&state_path), Ok(false));
+}
+
+#[test]
+fn execute_rule_persists_retry_state_for_translate_time_protocol_failure() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+    let context = RuntimeContext {
+        platform: Platform::Claude,
+        raw_event: "Notification".to_string(),
+        event: "Notification".to_string(),
+        rule_id: "bad_structured".to_string(),
+        source_config_path: temp.path().join("hook-bridge.yaml"),
+        session_or_thread_id: "s1".to_string(),
+        cwd: None,
+        transcript_path: None,
+        raw_payload: "{}".to_string(),
+    };
+    let rule = PlatformRule {
+        event: "Notification".to_string(),
+        command: "echo bad".to_string(),
+        matcher: None,
+        shell: "sh".to_string(),
+        timeout_sec: 30,
+        max_retries: 2,
+        working_dir: None,
+        env: BTreeMap::new(),
+        extra: BTreeMap::new(),
+    };
+    let state_path = retry_state_path(
+        &ExecuteRuntime {
+            fs: OsFileSystem,
+            clock: FixedClock::new(std::time::UNIX_EPOCH),
+            process: FakeProcessRunner::success(0),
+            io: CapturingIo::default(),
+            tmp: temp.path().to_path_buf(),
+        },
+        &context,
+    );
+
+    let runtime = RecordingRuntime {
+        fs: OsFileSystem,
+        clock: FixedClock::new(std::time::UNIX_EPOCH + Duration::from_secs(13)),
+        process: RecordingProcessRunner::success(
+            0,
+            br#"{"hook_bridge":{"kind":"stop","reason":"later"}}"#,
+            b"",
+        ),
+        io: CapturingIo::default(),
+        tmp: temp.path().to_path_buf(),
+    };
+
+    assert!(matches!(
+        execute_rule(&runtime, &rule, &context),
+        Err(HookBridgeError::PlatformProtocol { .. })
+    ));
+    assert_eq!(
+        load_retry_state(&runtime, &state_path),
+        Ok(RetryState {
+            consecutive_failures: 1,
+            last_error: "platform protocol error: claude event 'Notification' does not support bridge output 'Stop { reason: Some(\"later\"), system_message: None }'".to_string(),
+            last_failure_epoch_sec: 13,
+        })
+    );
 }

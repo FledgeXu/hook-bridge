@@ -27,7 +27,7 @@ pub(crate) static CWD_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// # Errors
 ///
 /// Returns any domain error produced while executing the selected subcommand.
-pub fn run_cli(cli: Cli) -> Result<(), HookBridgeError> {
+pub fn run_cli(cli: Cli) -> Result<u8, HookBridgeError> {
     let app = App::new(RealRuntime::default());
     app.execute(cli)
 }
@@ -47,9 +47,9 @@ pub struct ProgramOutcome {
 
 impl ProgramOutcome {
     #[must_use]
-    pub fn success() -> Self {
+    pub fn success(exit_code: u8) -> Self {
         Self {
-            exit_code: ExitCode::from(ExitCodeKind::Success as u8),
+            exit_code: ExitCode::from(exit_code),
             stream: None,
             message: None,
         }
@@ -113,7 +113,7 @@ where
 
     let app = App::new(RealRuntime::default());
     match app.execute(cli) {
-        Ok(()) => ProgramOutcome::success(),
+        Ok(exit_code) => ProgramOutcome::success(exit_code),
         Err(error) => ProgramOutcome::domain_error(&error),
     }
 }
@@ -329,7 +329,7 @@ mod tests {
 
         let result = app.execute(cli);
         let outcome = match result {
-            Ok(()) => ProgramOutcome::success(),
+            Ok(exit_code) => ProgramOutcome::success(exit_code),
             Err(error) => ProgramOutcome::domain_error(&error),
         };
 

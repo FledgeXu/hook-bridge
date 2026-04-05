@@ -36,15 +36,39 @@ pub struct ParsedContextFields {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlatformOutput {
     pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
     pub exit_code: i32,
 }
 
 #[must_use]
 pub fn normalize_event_name(platform: Platform, event: &str) -> Option<&'static str> {
     let normalized = match event {
-        "PreToolUse" | "before_command" => "before_command",
-        "PostToolUse" | "after_command" => "after_command",
-        "SessionStart" | "session_start" => "session_start",
+        "before_command" | "PreToolUse" => "PreToolUse",
+        "after_command" | "PostToolUse" => "PostToolUse",
+        "session_start" | "SessionStart" => "SessionStart",
+        "UserPromptSubmit" => "UserPromptSubmit",
+        "Stop" => "Stop",
+        "PermissionRequest" => "PermissionRequest",
+        "PermissionDenied" => "PermissionDenied",
+        "PostToolUseFailure" => "PostToolUseFailure",
+        "Notification" => "Notification",
+        "SubagentStart" => "SubagentStart",
+        "SubagentStop" => "SubagentStop",
+        "TaskCreated" => "TaskCreated",
+        "TaskCompleted" => "TaskCompleted",
+        "StopFailure" => "StopFailure",
+        "TeammateIdle" => "TeammateIdle",
+        "InstructionsLoaded" => "InstructionsLoaded",
+        "ConfigChange" => "ConfigChange",
+        "CwdChanged" => "CwdChanged",
+        "FileChanged" => "FileChanged",
+        "WorktreeCreate" => "WorktreeCreate",
+        "WorktreeRemove" => "WorktreeRemove",
+        "PreCompact" => "PreCompact",
+        "PostCompact" => "PostCompact",
+        "Elicitation" => "Elicitation",
+        "ElicitationResult" => "ElicitationResult",
+        "SessionEnd" => "SessionEnd",
         _ => return None,
     };
 
@@ -86,19 +110,23 @@ mod tests {
     fn normalize_event_name_accepts_native_and_unified_values() {
         assert_eq!(
             normalize_event_name(Platform::Codex, "PreToolUse"),
-            Some("before_command")
+            Some("PreToolUse")
         );
         assert_eq!(
             normalize_event_name(Platform::Claude, "PostToolUse"),
-            Some("after_command")
+            Some("PostToolUse")
         );
         assert_eq!(
             normalize_event_name(Platform::Codex, "SessionStart"),
-            Some("session_start")
+            Some("SessionStart")
         );
         assert_eq!(
             normalize_event_name(Platform::Claude, "before_command"),
-            Some("before_command")
+            Some("PreToolUse")
+        );
+        assert_eq!(
+            normalize_event_name(Platform::Claude, "Notification"),
+            Some("Notification")
         );
         assert_eq!(normalize_event_name(Platform::Codex, "Notification"), None);
     }
@@ -108,10 +136,12 @@ mod tests {
         assert_eq!(
             PlatformOutput {
                 stdout: b"{}".to_vec(),
+                stderr: b"warn".to_vec(),
                 exit_code: 0,
             },
             PlatformOutput {
                 stdout: b"{}".to_vec(),
+                stderr: b"warn".to_vec(),
                 exit_code: 0,
             }
         );

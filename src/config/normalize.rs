@@ -200,22 +200,7 @@ fn build_platform_rule(
         return Ok(None);
     }
 
-    let event = override_block
-        .as_ref()
-        .and_then(|block| block.event.clone())
-        .unwrap_or_else(|| raw_rule.event.clone());
-
-    if !capability::supports_event(platform, &event) {
-        return Err(HookBridgeError::ConfigValidation {
-            message: format!(
-                "rule '{}' field 'event' value '{}' is not supported by platform '{}': supported={:?}",
-                raw_rule.id,
-                event,
-                platform.as_str(),
-                capability::events(platform)
-            ),
-        });
-    }
+    let event = normalize_platform_event(platform, raw_rule, override_block.as_ref())?;
 
     let matcher = override_block
         .as_ref()
@@ -300,6 +285,28 @@ fn build_platform_rule(
         env,
         extra,
     }))
+}
+
+fn normalize_platform_event(
+    platform: Platform,
+    raw_rule: &RawHookRule,
+    override_block: Option<&super::schema::RawPlatformOverride>,
+) -> Result<String, HookBridgeError> {
+    let raw_event = override_block
+        .and_then(|block| block.event.clone())
+        .unwrap_or_else(|| raw_rule.event.clone());
+
+    crate::platform::normalize_event_name(platform, &raw_event)
+        .map(str::to_string)
+        .ok_or_else(|| HookBridgeError::ConfigValidation {
+            message: format!(
+                "rule '{}' field 'event' value '{}' is not supported by platform '{}': supported={:?}",
+                raw_rule.id,
+                raw_event,
+                platform.as_str(),
+                capability::events(platform)
+            ),
+        })
 }
 
 fn is_valid_rule_id(value: &str) -> bool {

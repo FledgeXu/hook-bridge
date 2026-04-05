@@ -40,7 +40,7 @@ pub fn build_generation_input(normalized: &NormalizedConfig) -> PlatformGenerati
                         platform,
                         rule_id: hook.id.clone(),
                         event: rule.event.clone(),
-                        native_event: native_event_name(&rule.event).to_string(),
+                        native_event: rule.event.clone(),
                         command: build_run_command(platform, &hook.id),
                         matcher: rule.matcher.clone(),
                         timeout_field: capability::timeout_field_name(platform).to_string(),
@@ -121,11 +121,7 @@ pub fn build_run_command(platform: Platform, rule_id: &str) -> String {
     )
 }
 
+#[cfg(test)]
 pub(crate) fn native_event_name(event: &str) -> &str {
-    match event {
-        "before_command" => "PreToolUse",
-        "after_command" => "PostToolUse",
-        "session_start" => "SessionStart",
-        _ => event,
-    }
+    event
 }

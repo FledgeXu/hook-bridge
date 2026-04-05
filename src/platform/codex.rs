@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::error::HookBridgeError;
 use crate::platform::capability::{self, DecisionKind};
 use crate::platform::{ParsedContextFields, Platform, PlatformOutput, normalize_event_name};
-use crate::run::{ExecutionResult, InternalStatus, RuntimeContext};
+use crate::run::{BridgeOutput, ExecutionResult, InternalStatus, RuntimeContext};
 
 pub const PLATFORM_NAME: &str = "codex";
 
@@ -55,34 +55,141 @@ pub fn parse_context_fields(
 ///
 /// # Errors
 ///
-/// Returns a platform-protocol error when the event cannot express the internal decision without
-/// degrading semantics, or when the output JSON cannot be serialized.
+/// Returns a platform-protocol error if the output cannot be expressed for the event.
 pub fn translate_output(
     context: &RuntimeContext,
     result: &ExecutionResult,
 ) -> Result<PlatformOutput, HookBridgeError> {
+    if let Some(bridge_output) = &result.bridge_output {
+        return translate_bridge_output(context, bridge_output);
+    }
+
     match result.status {
         InternalStatus::Success => Ok(PlatformOutput {
             stdout: Vec::new(),
+            stderr: Vec::new(),
             exit_code: 0,
         }),
-        InternalStatus::Stop => stop_output(context, result),
-        InternalStatus::Block | InternalStatus::Error => block_output(context, result),
+        InternalStatus::Stop => stop_output(
+            context,
+            result.message.clone(),
+            result.system_message.clone(),
+        ),
+        InternalStatus::Block | InternalStatus::Error => block_output(
+            context,
+            result.message.clone(),
+            result.system_message.clone(),
+        ),
+    }
+}
+
+fn translate_bridge_output(
+    context: &RuntimeContext,
+    bridge_output: &BridgeOutput,
+) -> Result<PlatformOutput, HookBridgeError> {
+    match bridge_output {
+        BridgeOutput::Success => Ok(PlatformOutput {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            exit_code: 0,
+        }),
+        BridgeOutput::Block {
+            reason,
+            system_message,
+        } => block_output(context, reason.clone(), system_message.clone()),
+        BridgeOutput::Error {
+            message,
+            system_message,
+        } => block_output(context, message.clone(), system_message.clone()),
+        BridgeOutput::Stop {
+            reason,
+            system_message,
+        } => stop_output(context, reason.clone(), system_message.clone()),
+        BridgeOutput::AdditionalContext { text }
+            if matches!(
+                context.event.as_str(),
+                "SessionStart" | "UserPromptSubmit" | "PostToolUse"
+            ) =>
+        {
+            Ok(PlatformOutput {
+                stdout: serialize_output(&serde_json::json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": context.event,
+                        "additionalContext": text,
+                    }
+                }))?,
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
+        }
+        BridgeOutput::PermissionDecision {
+            behavior,
+            reason,
+            updated_input,
+            additional_context,
+            ..
+        } if context.event == "PreToolUse" => {
+            if updated_input.is_some() {
+                return Err(HookBridgeError::PlatformProtocol {
+                    message: format!(
+                        "codex event '{}' does not support permission_decision.updated_input",
+                        context.raw_event
+                    ),
+                });
+            }
+
+            let mut hook_specific = serde_json::Map::new();
+            hook_specific.insert(
+                "hookEventName".to_string(),
+                serde_json::Value::String("PreToolUse".to_string()),
+            );
+            hook_specific.insert(
+                "permissionDecision".to_string(),
+                serde_json::Value::String(behavior.clone()),
+            );
+            if let Some(reason) = reason {
+                hook_specific.insert(
+                    "permissionDecisionReason".to_string(),
+                    serde_json::Value::String(reason.clone()),
+                );
+            }
+            if let Some(additional_context) = additional_context {
+                hook_specific.insert(
+                    "additionalContext".to_string(),
+                    serde_json::Value::String(additional_context.clone()),
+                );
+            }
+
+            Ok(PlatformOutput {
+                stdout: serialize_output(&serde_json::json!({
+                    "hookSpecificOutput": hook_specific,
+                }))?,
+                stderr: Vec::new(),
+                exit_code: 0,
+            })
+        }
+        other => Err(HookBridgeError::PlatformProtocol {
+            message: format!(
+                "codex event '{}' does not support bridge output '{other:?}'",
+                context.raw_event
+            ),
+        }),
     }
 }
 
 fn stop_output(
     context: &RuntimeContext,
-    result: &ExecutionResult,
+    reason: Option<String>,
+    system_message: Option<String>,
 ) -> Result<PlatformOutput, HookBridgeError> {
     ensure_decision_supported(context, DecisionKind::Stop)?;
 
     let mut value = serde_json::Map::new();
     value.insert("continue".to_string(), serde_json::Value::Bool(false));
-    if let Some(reason) = stop_reason(result) {
+    if let Some(reason) = reason {
         value.insert("stopReason".to_string(), serde_json::Value::String(reason));
     }
-    if let Some(system_message) = result.system_message.clone() {
+    if let Some(system_message) = system_message {
         value.insert(
             "systemMessage".to_string(),
             serde_json::Value::String(system_message),
@@ -91,13 +198,15 @@ fn stop_output(
 
     Ok(PlatformOutput {
         stdout: serialize_output(&serde_json::Value::Object(value))?,
+        stderr: Vec::new(),
         exit_code: 0,
     })
 }
 
 fn block_output(
     context: &RuntimeContext,
-    result: &ExecutionResult,
+    reason: Option<String>,
+    system_message: Option<String>,
 ) -> Result<PlatformOutput, HookBridgeError> {
     ensure_decision_supported(context, DecisionKind::Block)?;
 
@@ -106,10 +215,10 @@ fn block_output(
         "decision".to_string(),
         serde_json::Value::String("block".to_string()),
     );
-    if let Some(reason) = block_reason(result) {
+    if let Some(reason) = reason {
         value.insert("reason".to_string(), serde_json::Value::String(reason));
     }
-    if let Some(system_message) = result.system_message.clone() {
+    if let Some(system_message) = system_message {
         value.insert(
             "systemMessage".to_string(),
             serde_json::Value::String(system_message),
@@ -118,6 +227,7 @@ fn block_output(
 
     Ok(PlatformOutput {
         stdout: serialize_output(&serde_json::Value::Object(value))?,
+        stderr: Vec::new(),
         exit_code: 0,
     })
 }
@@ -138,20 +248,6 @@ fn ensure_decision_supported(
     })
 }
 
-fn block_reason(result: &ExecutionResult) -> Option<String> {
-    result
-        .message
-        .clone()
-        .or_else(|| result.system_message.clone())
-}
-
-fn stop_reason(result: &ExecutionResult) -> Option<String> {
-    result
-        .message
-        .clone()
-        .or_else(|| result.system_message.clone())
-}
-
 fn serialize_output(value: &serde_json::Value) -> Result<Vec<u8>, HookBridgeError> {
     let mut stdout =
         serde_json::to_vec(value).map_err(|error| HookBridgeError::PlatformProtocol {
@@ -166,9 +262,23 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::platform::Platform;
-    use crate::run::{ExecutionResult, InternalStatus, RuntimeContext};
+    use crate::run::{BridgeOutput, ExecutionResult, InternalStatus, RuntimeContext};
 
     use super::{parse_context_fields, translate_output};
+
+    fn context(event: &str) -> RuntimeContext {
+        RuntimeContext {
+            platform: Platform::Codex,
+            raw_event: event.to_string(),
+            event: event.to_string(),
+            rule_id: "r1".to_string(),
+            source_config_path: "/tmp/cfg.yaml".into(),
+            session_or_thread_id: "t1".to_string(),
+            cwd: None,
+            transcript_path: None,
+            raw_payload: "{}".to_string(),
+        }
+    }
 
     #[test]
     fn parses_hook_event_name_field() {
@@ -182,7 +292,7 @@ mod tests {
             parse_context_fields(&payload),
             Ok(crate::platform::ParsedContextFields {
                 raw_event: "PreToolUse".to_string(),
-                event: "before_command".to_string(),
+                event: "PreToolUse".to_string(),
                 session_or_thread_id: "t1".to_string(),
                 cwd: Some(PathBuf::from("/tmp")),
                 transcript_path: None,
@@ -191,68 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_optional_transcript_path() {
-        let payload = serde_json::json!({
-            "hook_event_name": "after_command",
-            "session_id": "s2",
-            "transcript_path": "/tmp/transcript.json",
-        });
-
-        assert_eq!(
-            parse_context_fields(&payload),
-            Ok(crate::platform::ParsedContextFields {
-                raw_event: "after_command".to_string(),
-                event: "after_command".to_string(),
-                session_or_thread_id: "s2".to_string(),
-                cwd: None,
-                transcript_path: Some(PathBuf::from("/tmp/transcript.json")),
-            })
-        );
-    }
-
-    #[test]
-    fn rejects_missing_required_fields() {
-        assert_eq!(
-            parse_context_fields(&serde_json::json!({ "session_id": "t1" })),
-            Err(crate::error::HookBridgeError::PlatformProtocol {
-                message: "codex payload missing required field 'hook_event_name'".to_string(),
-            })
-        );
-        assert_eq!(
-            parse_context_fields(&serde_json::json!({ "hook_event_name": "before_command" })),
-            Err(crate::error::HookBridgeError::PlatformProtocol {
-                message: "codex payload missing required field 'session_id'".to_string(),
-            })
-        );
-    }
-
-    #[test]
-    fn rejects_unsupported_event_names() {
-        assert_eq!(
-            parse_context_fields(&serde_json::json!({
-                "hook_event_name": "Notification",
-                "session_id": "s1",
-            })),
-            Err(crate::error::HookBridgeError::PlatformProtocol {
-                message: "codex payload event 'Notification' is not supported for platform 'codex'"
-                    .to_string(),
-            })
-        );
-    }
-
-    #[test]
     fn translates_success_to_empty_output() {
-        let context = RuntimeContext {
-            platform: Platform::Codex,
-            raw_event: "before_command".to_string(),
-            event: "before_command".to_string(),
-            rule_id: "r1".to_string(),
-            source_config_path: "/tmp/cfg.yaml".into(),
-            session_or_thread_id: "t1".to_string(),
-            cwd: None,
-            transcript_path: None,
-            raw_payload: "{}".to_string(),
-        };
         let success = ExecutionResult {
             status: InternalStatus::Success,
             message: None,
@@ -260,71 +309,50 @@ mod tests {
             exit_code: Some(0),
             raw_stdout: Vec::new(),
             raw_stderr: Vec::new(),
+            bridge_output: None,
         };
 
         assert_eq!(
-            translate_output(&context, &success),
+            translate_output(&context("PreToolUse"), &success),
             Ok(crate::platform::PlatformOutput {
                 stdout: Vec::new(),
+                stderr: Vec::new(),
                 exit_code: 0,
             })
         );
     }
 
     #[test]
-    fn translates_before_command_error_to_block_shape() {
-        let context = RuntimeContext {
-            platform: Platform::Codex,
-            raw_event: "PreToolUse".to_string(),
-            event: "before_command".to_string(),
-            rule_id: "r1".to_string(),
-            source_config_path: "/tmp/cfg.yaml".into(),
-            session_or_thread_id: "t1".to_string(),
-            cwd: None,
-            transcript_path: None,
-            raw_payload: "{}".to_string(),
-        };
-        let failure = ExecutionResult {
-            status: InternalStatus::Error,
-            message: Some("denied".to_string()),
-            system_message: Some("bridge blocked".to_string()),
-            exit_code: Some(1),
+    fn translates_additional_context_for_session_start() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
             raw_stdout: Vec::new(),
             raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::AdditionalContext {
+                text: "Load conventions".to_string(),
+            }),
         };
 
-        let translated = translate_output(&context, &failure);
-        assert!(
-            translated.is_ok(),
-            "before_command block output should serialize"
-        );
-        let Ok(output) = translated else {
-            return;
-        };
-        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout);
+        let translated = translate_output(&context("SessionStart"), &result);
+        assert!(translated.is_ok());
+        let output = translated.unwrap_or_else(|_| unreachable!());
+        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
         assert_eq!(
-            parsed.ok(),
+            parsed,
             Some(serde_json::json!({
-                "decision": "block",
-                "reason": "denied",
-                "systemMessage": "bridge blocked",
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": "Load conventions"
+                }
             }))
         );
     }
 
     #[test]
-    fn translates_after_command_stop_to_continue_false_shape() {
-        let context = RuntimeContext {
-            platform: Platform::Codex,
-            raw_event: "PostToolUse".to_string(),
-            event: "after_command".to_string(),
-            rule_id: "r1".to_string(),
-            source_config_path: "/tmp/cfg.yaml".into(),
-            session_or_thread_id: "t1".to_string(),
-            cwd: None,
-            transcript_path: None,
-            raw_payload: "{}".to_string(),
-        };
+    fn translates_stop_output_to_continue_false_shape() {
         let stop = ExecutionResult {
             status: InternalStatus::Stop,
             message: Some("stop now".to_string()),
@@ -332,19 +360,15 @@ mod tests {
             exit_code: Some(0),
             raw_stdout: Vec::new(),
             raw_stderr: Vec::new(),
+            bridge_output: None,
         };
 
-        let translated = translate_output(&context, &stop);
-        assert!(
-            translated.is_ok(),
-            "after_command stop output should serialize"
-        );
-        let Ok(output) = translated else {
-            return;
-        };
-        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout);
+        let translated = translate_output(&context("Stop"), &stop);
+        assert!(translated.is_ok());
+        let output = translated.unwrap_or_else(|_| unreachable!());
+        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
         assert_eq!(
-            parsed.ok(),
+            parsed,
             Some(serde_json::json!({
                 "continue": false,
                 "stopReason": "stop now",
@@ -354,33 +378,155 @@ mod tests {
     }
 
     #[test]
-    fn rejects_stop_for_before_command_event() {
-        let context = RuntimeContext {
-            platform: Platform::Codex,
-            raw_event: "PreToolUse".to_string(),
-            event: "before_command".to_string(),
-            rule_id: "r1".to_string(),
-            source_config_path: "/tmp/cfg.yaml".into(),
-            session_or_thread_id: "t1".to_string(),
-            cwd: None,
-            transcript_path: None,
-            raw_payload: "{}".to_string(),
+    fn preserves_optional_transcript_path() {
+        let payload = serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "session_id": "t1",
+            "transcript_path": "/tmp/transcript.json",
+        });
+
+        assert_eq!(
+            parse_context_fields(&payload),
+            Ok(crate::platform::ParsedContextFields {
+                raw_event: "PostToolUse".to_string(),
+                event: "PostToolUse".to_string(),
+                session_or_thread_id: "t1".to_string(),
+                cwd: None,
+                transcript_path: Some(PathBuf::from("/tmp/transcript.json")),
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_missing_required_fields_and_unsupported_event() {
+        assert!(matches!(
+            parse_context_fields(&serde_json::json!({ "session_id": "t1" })),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
+        assert!(matches!(
+            parse_context_fields(&serde_json::json!({
+                "hook_event_name": "Notification",
+                "session_id": "t1",
+            })),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
+    }
+
+    #[test]
+    fn translates_block_output_to_decision_shape() {
+        let failure = ExecutionResult {
+            status: InternalStatus::Block,
+            message: Some("deny".to_string()),
+            system_message: Some("bridge blocked".to_string()),
+            exit_code: Some(1),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: None,
         };
-        let stop = ExecutionResult {
-            status: InternalStatus::Stop,
-            message: Some("denied".to_string()),
+
+        let translated = translate_output(&context("PreToolUse"), &failure);
+        assert!(translated.is_ok());
+        let output = translated.unwrap_or_else(|_| unreachable!());
+        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+        assert_eq!(
+            parsed,
+            Some(serde_json::json!({
+                "decision": "block",
+                "reason": "deny",
+                "systemMessage": "bridge blocked",
+            }))
+        );
+    }
+
+    #[test]
+    fn translates_permission_decision_for_pre_tool_use() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
             system_message: None,
             exit_code: Some(0),
             raw_stdout: Vec::new(),
             raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::PermissionDecision {
+                behavior: "deny".to_string(),
+                reason: Some("blocked".to_string()),
+                updated_input: None,
+                additional_context: Some("extra".to_string()),
+            }),
         };
 
+        let translated = translate_output(&context("PreToolUse"), &result);
+        assert!(translated.is_ok());
+        let output = translated.unwrap_or_else(|_| unreachable!());
+        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
         assert_eq!(
-            translate_output(&context, &stop),
-            Err(crate::error::HookBridgeError::PlatformProtocol {
-                message: "codex event 'PreToolUse' does not support runtime decision 'Stop'"
-                    .to_string(),
-            })
+            parsed,
+            Some(serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "blocked",
+                    "additionalContext": "extra"
+                }
+            }))
         );
+    }
+
+    #[test]
+    fn rejects_permission_decision_updated_input_for_pre_tool_use() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::PermissionDecision {
+                behavior: "allow".to_string(),
+                reason: Some("rewritten".to_string()),
+                updated_input: Some(serde_json::json!({
+                    "command": "safe-command --flag"
+                })),
+                additional_context: None,
+            }),
+        };
+
+        assert!(matches!(
+            translate_output(&context("PreToolUse"), &result),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_stop_for_pre_tool_use_and_additional_context_for_unsupported_event() {
+        let stop = ExecutionResult {
+            status: InternalStatus::Stop,
+            message: Some("nope".to_string()),
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: None,
+        };
+        assert!(matches!(
+            translate_output(&context("PreToolUse"), &stop),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
+
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::AdditionalContext {
+                text: "ignored".to_string(),
+            }),
+        };
+        assert!(matches!(
+            translate_output(&context("Stop"), &result),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
     }
 }

@@ -938,6 +938,107 @@ hooks:
 }
 
 #[test]
+fn invalid_structured_output_creates_retry_state_after_protocol_failure() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let config_path = temp.path().join("hook-bridge.yaml");
+    let write_result = fs::write(
+        &config_path,
+        r#"
+version: 1
+defaults:
+  max_retries: 2
+hooks:
+  - id: bad_structured
+    event: Notification
+    command: |
+      cat <<'EOF'
+      {"hook_bridge":{"kind":"stop","reason":"later"}}
+      EOF
+    platforms:
+      codex:
+        enabled: false
+"#,
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload =
+        r#"{"hook_event_name":"Notification","session_id":"bad_structured_session","cwd":"."}"#;
+    let state_path = retry_state_path(
+        "claude",
+        &config_path,
+        "bad_structured_session",
+        "bad_structured",
+    );
+
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("claude")
+        .arg("--rule-id")
+        .arg("bad_structured")
+        .write_stdin(payload)
+        .assert()
+        .failure()
+        .code(8)
+        .stderr(predicate::str::contains("platform protocol error"));
+
+    let state_result = fs::read_to_string(&state_path);
+    assert!(
+        state_result.is_ok(),
+        "retry state should exist after translate-time protocol failure"
+    );
+    let Ok(state_json) = state_result else {
+        return;
+    };
+    let parsed_result = serde_json::from_str::<serde_json::Value>(&state_json);
+    assert!(parsed_result.is_ok(), "retry state should stay valid json");
+    let Ok(parsed) = parsed_result else {
+        return;
+    };
+    assert_eq!(
+        parsed.get("consecutive_failures"),
+        Some(&serde_json::Value::from(1))
+    );
+    assert!(
+        parsed
+            .get("last_error")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|message| message.contains("platform protocol error")),
+        "retry state should record the translate-time protocol error"
+    );
+}
+
+#[test]
 fn generate_to_run_round_trip_works_for_claude_native_protocol() {
     let temp_result = tempfile::tempdir();
     assert!(temp_result.is_ok(), "tempdir creation should succeed");
@@ -1035,7 +1136,7 @@ fn claude_payload_uses_hook_event_name_and_block_decision_on_failure() {
 version: 1
 hooks:
   - id: r_claude
-    event: before_command
+    event: UserPromptSubmit
     command: exit 1
 ",
     );
@@ -1057,7 +1158,7 @@ hooks:
         .assert()
         .success();
 
-    let payload = r#"{"hook_event_name":"before_command","session_id":"claude_s","cwd":"."}"#;
+    let payload = r#"{"hook_event_name":"UserPromptSubmit","session_id":"claude_s","cwd":"."}"#;
     let run_result = Command::cargo_bin("hook_bridge");
     assert!(
         run_result.is_ok(),
@@ -1135,4 +1236,461 @@ hooks:
         .failure()
         .code(5)
         .stderr(predicate::str::contains("json parse error"));
+}
+
+#[test]
+fn run_command_translates_structured_codex_session_start_output() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r#"
+version: 1
+hooks:
+  - id: r_session
+    event: session_start
+    command: |
+      cat <<'EOF'
+      {"hook_bridge":{"kind":"additional_context","text":"Load the workspace conventions before editing."}}
+      EOF
+"#,
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload =
+        r#"{"hook_event_name":"SessionStart","session_id":"session_structured","cwd":"."}"#;
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--rule-id")
+        .arg("r_session")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            r#""hookEventName":"SessionStart""#,
+        ))
+        .stdout(predicate::str::contains(
+            r#""additionalContext":"Load the workspace conventions before editing.""#,
+        ));
+}
+
+#[test]
+fn run_command_translates_plaintext_codex_session_start_output() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r"
+version: 1
+hooks:
+  - id: r_session_plain
+    event: session_start
+    command: echo Load the workspace conventions before editing.
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload = r#"{"hook_event_name":"SessionStart","session_id":"session_plain","cwd":"."}"#;
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--rule-id")
+        .arg("r_session_plain")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            r#""hookEventName":"SessionStart""#,
+        ))
+        .stdout(predicate::str::contains(
+            r#""additionalContext":"Load the workspace conventions before editing.""#,
+        ));
+}
+
+#[test]
+fn run_command_translates_structured_claude_worktree_path_output() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r#"
+version: 1
+hooks:
+  - id: r_worktree
+    event: WorktreeCreate
+    command: |
+      cat <<'EOF'
+      {"hook_bridge":{"kind":"worktree_path","path":"/tmp/hook-bridge-worktree"}}
+      EOF
+    platforms:
+      codex:
+        enabled: false
+"#,
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload =
+        r#"{"hook_event_name":"WorktreeCreate","session_id":"claude_worktree","cwd":"."}"#;
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("claude")
+        .arg("--rule-id")
+        .arg("r_worktree")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout("/tmp/hook-bridge-worktree\n");
+}
+
+#[test]
+fn structured_stdout_does_not_override_non_zero_exit() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r#"
+version: 1
+hooks:
+  - id: r_fail_json
+    event: before_command
+    command: |
+      cat <<'EOF'
+      {"hook_bridge":{"kind":"additional_context","text":"ignore me"}}
+      EOF
+      exit 9
+"#,
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload =
+        r#"{"hook_event_name":"before_command","session_id":"structured_fail","cwd":"."}"#;
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--rule-id")
+        .arg("r_fail_json")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""decision":"block""#))
+        .stdout(predicate::str::contains("non-zero status 9"))
+        .stdout(predicate::str::contains("ignore me").not());
+}
+
+#[test]
+fn plaintext_stdout_is_invalid_for_codex_stop() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r"
+version: 1
+hooks:
+  - id: r_stop_plain
+    event: Stop
+    command: echo keep-going
+    platforms:
+      claude:
+        enabled: false
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload = r#"{"hook_event_name":"Stop","session_id":"stop_plain","cwd":"."}"#;
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--rule-id")
+        .arg("r_stop_plain")
+        .write_stdin(payload)
+        .assert()
+        .failure()
+        .code(8)
+        .stderr(predicate::str::contains("platform protocol error"))
+        .stderr(predicate::str::contains(
+            "does not support plain-text success stdout",
+        ))
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn claude_task_completed_exit_two_returns_feedback_without_protocol_error() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r"
+version: 1
+hooks:
+  - id: teammate_feedback
+    event: TaskCompleted
+    command: |
+      echo ask the user for clarification >&2
+      exit 2
+    platforms:
+      codex:
+        enabled: false
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload = r#"{"hook_event_name":"TaskCompleted","session_id":"teammate_done","cwd":"."}"#;
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("claude")
+        .arg("--rule-id")
+        .arg("teammate_feedback")
+        .write_stdin(payload)
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("ask the user for clarification"))
+        .stderr(predicate::str::contains("platform protocol error").not())
+        .stdout(predicate::str::is_empty());
+}
+
+#[test]
+fn claude_subagent_stop_exit_two_returns_block_protocol() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r"
+version: 1
+hooks:
+  - id: subagent_stop_block
+    event: SubagentStop
+    command: |
+      echo stop this subagent >&2
+      exit 2
+    platforms:
+      codex:
+        enabled: false
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload = r#"{"hook_event_name":"SubagentStop","session_id":"subagent_done","cwd":"."}"#;
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("claude")
+        .arg("--rule-id")
+        .arg("subagent_stop_block")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""decision":"block""#))
+        .stdout(predicate::str::contains("non-zero status 2"))
+        .stderr(predicate::str::is_empty());
 }

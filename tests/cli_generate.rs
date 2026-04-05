@@ -360,3 +360,130 @@ fn generate_command_maps_invalid_yaml_syntax_to_config_exit_code() {
         .code(3)
         .stderr(predicate::str::contains("config validation error"));
 }
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "integration assertion keeps native-event coverage in one place"
+)]
+fn generate_command_uses_native_event_names_for_extended_events() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_config_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r"
+version: 1
+hooks:
+  - id: s1
+    event: session_start
+    command: echo start
+    matcher: resume
+  - id: c1
+    event: Notification
+    command: echo note
+    platforms:
+      codex:
+        enabled: false
+",
+    );
+    assert!(write_config_result.is_ok(), "config file should be written");
+
+    let command_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        command_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut command) = command_result else {
+        return;
+    };
+
+    command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let claude_content_result = fs::read_to_string(temp.path().join(".claude/settings.json"));
+    assert!(
+        claude_content_result.is_ok(),
+        "claude managed file should be readable"
+    );
+    let Ok(claude_content) = claude_content_result else {
+        return;
+    };
+    let claude_parsed_result = serde_json::from_str::<serde_json::Value>(&claude_content);
+    assert!(
+        claude_parsed_result.is_ok(),
+        "claude managed file should be valid json"
+    );
+    let Ok(claude_parsed) = claude_parsed_result else {
+        return;
+    };
+
+    assert_eq!(
+        claude_parsed
+            .get("hooks")
+            .and_then(|value| value.get("SessionStart")),
+        Some(&serde_json::json!([{
+            "matcher": "resume",
+            "hooks": [{
+                "type": "command",
+                "id": "s1",
+                "command": "hook_bridge run --platform claude --rule-id s1",
+                "timeout_sec": 30
+            }]
+        }]))
+    );
+    assert!(
+        claude_parsed
+            .get("hooks")
+            .and_then(|value| value.get("Notification"))
+            .is_some(),
+        "claude output should preserve native extended event names"
+    );
+
+    let codex_content_result = fs::read_to_string(temp.path().join(".codex/hooks.json"));
+    assert!(
+        codex_content_result.is_ok(),
+        "codex managed file should be readable"
+    );
+    let Ok(codex_content) = codex_content_result else {
+        return;
+    };
+    let codex_parsed_result = serde_json::from_str::<serde_json::Value>(&codex_content);
+    assert!(
+        codex_parsed_result.is_ok(),
+        "codex managed file should be valid json"
+    );
+    let Ok(codex_parsed) = codex_parsed_result else {
+        return;
+    };
+
+    assert_eq!(
+        codex_parsed
+            .get("hooks")
+            .and_then(|value| value.get("SessionStart")),
+        Some(&serde_json::json!([{
+            "matcher": "resume",
+            "hooks": [{
+                "type": "command",
+                "id": "s1",
+                "command": "hook_bridge run --platform codex --rule-id s1",
+                "timeout_sec": 30
+            }]
+        }]))
+    );
+    assert!(
+        codex_parsed
+            .get("hooks")
+            .and_then(|value| value.get("Notification"))
+            .is_none(),
+        "codex-disabled extended events should not be generated"
+    );
+}

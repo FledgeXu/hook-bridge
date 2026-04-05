@@ -122,7 +122,49 @@ hooks:
     matcher: never
 ";
     let parsed = parse_and_normalize("/tmp/cfg.yaml".into(), yaml);
-    assert!(parsed.is_err(), "session_start should reject matcher");
+    assert!(parsed.is_ok(), "session_start should allow matcher");
+
+    let yaml = r"
+version: 1
+hooks:
+  - id: r2
+    event: Elicitation
+    command: echo ok
+    matcher: mcp-server-name
+    platforms:
+      codex:
+        enabled: false
+";
+    let parsed = parse_and_normalize("/tmp/cfg.yaml".into(), yaml);
+    assert!(parsed.is_ok(), "elicitation should allow matcher");
+
+    let yaml = r"
+version: 1
+hooks:
+  - id: r3
+    event: Notification
+    command: echo ok
+    matcher: token-refresh
+    platforms:
+      codex:
+        enabled: false
+";
+    let parsed = parse_and_normalize("/tmp/cfg.yaml".into(), yaml);
+    assert!(parsed.is_ok(), "notification should allow matcher");
+
+    let yaml = r"
+version: 1
+hooks:
+  - id: r4
+    event: SubagentStop
+    command: echo ok
+    matcher: review-agent
+    platforms:
+      codex:
+        enabled: false
+";
+    let parsed = parse_and_normalize("/tmp/cfg.yaml".into(), yaml);
+    assert!(parsed.is_ok(), "subagent stop should allow matcher");
 }
 
 #[test]
@@ -267,9 +309,9 @@ fn normalize_config_path_joins_relative_paths_from_current_directory() {
 
 #[test]
 fn native_event_name_maps_supported_and_passthrough_events() {
-    assert_eq!(native_event_name("before_command"), "PreToolUse");
-    assert_eq!(native_event_name("after_command"), "PostToolUse");
-    assert_eq!(native_event_name("session_start"), "SessionStart");
+    assert_eq!(native_event_name("before_command"), "before_command");
+    assert_eq!(native_event_name("after_command"), "after_command");
+    assert_eq!(native_event_name("session_start"), "session_start");
     assert_eq!(native_event_name("custom"), "custom");
 }
 
@@ -310,6 +352,107 @@ hooks:
             })]
         )])
     );
+}
+
+#[test]
+fn collect_platform_hooks_emits_matcher_for_claude_elicitation() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: Elicitation
+    command: echo ok
+    matcher: mcp-server-name
+    platforms:
+      codex:
+        enabled: false
+";
+    let parsed = parse_and_normalize("/tmp/cfg.yaml".into(), yaml);
+    assert!(parsed.is_ok(), "config should parse");
+    let Ok(config) = parsed else {
+        return;
+    };
+    let generation = build_generation_input(&config);
+
+    let maybe_rule = generation
+        .rules
+        .iter()
+        .find(|rule| rule.platform == Platform::Claude);
+    assert!(maybe_rule.is_some(), "claude rule should exist");
+    let Some(rule) = maybe_rule else {
+        return;
+    };
+
+    assert_eq!(rule.event, "Elicitation");
+    assert_eq!(rule.matcher.as_deref(), Some("mcp-server-name"));
+}
+
+#[test]
+fn collect_platform_hooks_emits_matcher_for_claude_notification_and_subagent_events() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: notify
+    event: Notification
+    command: echo notify
+    matcher: token-refresh
+    platforms:
+      codex:
+        enabled: false
+  - id: sub_start
+    event: SubagentStart
+    command: echo start
+    matcher: review-agent
+    platforms:
+      codex:
+        enabled: false
+  - id: sub_stop
+    event: SubagentStop
+    command: echo stop
+    matcher: review-agent
+    platforms:
+      codex:
+        enabled: false
+";
+    let parsed = parse_and_normalize("/tmp/cfg.yaml".into(), yaml);
+    assert!(parsed.is_ok(), "config should parse");
+    let Ok(config) = parsed else {
+        return;
+    };
+    let generation = build_generation_input(&config);
+
+    let notify = generation
+        .rules
+        .iter()
+        .find(|rule| rule.platform == Platform::Claude && rule.event == "Notification");
+    assert!(notify.is_some(), "claude notification rule should exist");
+    let Some(notify_rule) = notify else {
+        return;
+    };
+    assert_eq!(notify_rule.matcher.as_deref(), Some("token-refresh"));
+
+    let sub_start = generation
+        .rules
+        .iter()
+        .find(|rule| rule.platform == Platform::Claude && rule.event == "SubagentStart");
+    assert!(
+        sub_start.is_some(),
+        "claude subagent-start rule should exist"
+    );
+    let Some(sub_start_rule) = sub_start else {
+        return;
+    };
+    assert_eq!(sub_start_rule.matcher.as_deref(), Some("review-agent"));
+
+    let sub_stop = generation
+        .rules
+        .iter()
+        .find(|rule| rule.platform == Platform::Claude && rule.event == "SubagentStop");
+    assert!(sub_stop.is_some(), "claude subagent-stop rule should exist");
+    let Some(sub_stop_rule) = sub_stop else {
+        return;
+    };
+    assert_eq!(sub_stop_rule.matcher.as_deref(), Some("review-agent"));
 }
 
 #[test]

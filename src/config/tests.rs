@@ -172,7 +172,7 @@ hooks:
 
     assert_eq!(
         rule.codex.as_ref().map(|value| value.event.as_str()),
-        Some("after_command")
+        Some("PostToolUse")
     );
     assert_eq!(
         rule.codex.as_ref().map(|value| value.command.as_str()),
@@ -222,6 +222,132 @@ hooks:
     assert_eq!(
         codex_rule.extra.get("continue"),
         Some(&serde_json::Value::Bool(false))
+    );
+}
+
+#[test]
+fn rejects_unsupported_claude_session_start_extra_field() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: session_start
+    command: echo ok
+    platforms:
+      claude:
+        decision: block
+";
+
+    assert_validation_error_contains(
+        yaml,
+        "field 'platforms.claude.decision' is not supported for event 'SessionStart'",
+    );
+}
+
+#[test]
+fn allows_matcher_for_claude_elicitation_event() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: Elicitation
+    command: echo ok
+    matcher: mcp-server-name
+    platforms:
+      codex:
+        enabled: false
+";
+
+    let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+    assert!(config_result.is_ok(), "config should parse");
+    let Ok(config) = config_result else {
+        return;
+    };
+    let maybe_rule = config.hooks.iter().find(|hook| hook.id == "r1");
+    assert!(maybe_rule.is_some(), "rule must exist");
+    let Some(rule) = maybe_rule else {
+        return;
+    };
+
+    assert_eq!(
+        rule.claude
+            .as_ref()
+            .and_then(|value| value.matcher.as_deref()),
+        Some("mcp-server-name")
+    );
+}
+
+#[test]
+fn allows_matcher_for_claude_notification_and_subagent_events() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: notify
+    event: Notification
+    command: echo notify
+    matcher: token-refresh
+    platforms:
+      codex:
+        enabled: false
+  - id: sub_start
+    event: SubagentStart
+    command: echo start
+    matcher: review-agent
+    platforms:
+      codex:
+        enabled: false
+  - id: sub_stop
+    event: SubagentStop
+    command: echo stop
+    matcher: review-agent
+    platforms:
+      codex:
+        enabled: false
+";
+
+    let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+    assert!(config_result.is_ok(), "config should parse");
+    let Ok(config) = config_result else {
+        return;
+    };
+
+    let notify = config.hooks.iter().find(|hook| hook.id == "notify");
+    assert!(notify.is_some(), "notification rule must exist");
+    let Some(notify_rule) = notify else {
+        return;
+    };
+    assert_eq!(
+        notify_rule
+            .claude
+            .as_ref()
+            .and_then(|value| value.matcher.as_deref()),
+        Some("token-refresh")
+    );
+
+    let sub_start = config.hooks.iter().find(|hook| hook.id == "sub_start");
+    assert!(sub_start.is_some(), "subagent-start rule must exist");
+    let Some(sub_start_rule) = sub_start else {
+        return;
+    };
+    assert_eq!(
+        sub_start_rule
+            .claude
+            .as_ref()
+            .and_then(|value| value.matcher.as_deref()),
+        Some("review-agent")
+    );
+
+    let sub_stop = config.hooks.iter().find(|hook| hook.id == "sub_stop");
+    assert!(sub_stop.is_some(), "subagent-stop rule must exist");
+    let Some(sub_stop_rule) = sub_stop else {
+        return;
+    };
+    assert_eq!(
+        sub_stop_rule
+            .claude
+            .as_ref()
+            .and_then(|value| value.matcher.as_deref()),
+        Some("review-agent")
     );
 }
 
@@ -468,6 +594,6 @@ hooks:
     assert_validation_error_contains(empty_command, "field 'command' must not be empty");
     assert_validation_error_contains(
         invalid_platform_field,
-        "field 'platforms.codex.decision' is not supported for event 'before_command'",
+        "field 'platforms.codex.decision' is not supported for event 'PreToolUse'",
     );
 }

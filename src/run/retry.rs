@@ -29,6 +29,7 @@ pub(crate) fn retry_guard_result() -> ExecutionResult {
         exit_code: Some(0),
         raw_stdout: Vec::new(),
         raw_stderr: Vec::new(),
+        bridge_output: None,
     }
 }
 

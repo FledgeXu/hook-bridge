@@ -19,9 +19,9 @@ impl<R: Runtime> App<R> {
     /// # Errors
     ///
     /// Returns any command execution error from the `generate` or `run` flow.
-    pub fn execute(&self, cli: Cli) -> Result<(), HookBridgeError> {
+    pub fn execute(&self, cli: Cli) -> Result<u8, HookBridgeError> {
         match cli.command {
-            Command::Generate(args) => generate::execute(&args, &self.runtime),
+            Command::Generate(args) => generate::execute(&args, &self.runtime).map(|()| 0),
             Command::Run(args) => run::execute(&args, &self.runtime),
         }
     }
