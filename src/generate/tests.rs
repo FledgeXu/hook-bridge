@@ -210,6 +210,97 @@ hooks:
 }
 
 #[test]
+fn top_level_status_message_is_emitted_for_both_platforms() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+    status_message: Checking command policy
+";
+    let parsed = parse_and_normalize("/tmp/cfg.yaml".into(), yaml);
+    assert!(parsed.is_ok(), "config should parse");
+    let Ok(config) = parsed else {
+        return;
+    };
+    let generation = build_generation_input(&config);
+
+    for platform in [Platform::Claude, Platform::Codex] {
+        let rule = generation
+            .rules
+            .iter()
+            .find(|rule| rule.platform == platform);
+        assert!(rule.is_some(), "platform rule should exist");
+        let Some(rule) = rule else {
+            return;
+        };
+        assert_eq!(
+            rule.status_message.as_deref(),
+            Some("Checking command policy")
+        );
+    }
+}
+
+#[test]
+fn execute_writes_status_message_to_claude_and_codex_targets() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let lock_result = crate::CWD_LOCK.lock();
+    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+    let Ok(_lock) = lock_result else {
+        return;
+    };
+    let guard_result = CurrentDirGuard::enter(temp.path());
+    assert!(guard_result.is_ok(), "cwd switch should succeed");
+    let Ok(_guard) = guard_result else {
+        return;
+    };
+
+    let config_path = temp.path().join("hook-bridge.yaml");
+    let write_result = std::fs::write(
+        &config_path,
+        r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+    status_message: Checking command policy
+",
+    );
+    assert!(write_result.is_ok(), "config should be written");
+
+    let args = GenerateArgs {
+        config: PathBuf::from("hook-bridge.yaml"),
+    };
+    let runtime = crate::runtime::RealRuntime::default();
+
+    let execute_result = execute(&args, &runtime);
+    assert!(execute_result.is_ok(), "generate should succeed");
+
+    let claude_content = std::fs::read_to_string(temp.path().join(CLAUDE_TARGET));
+    assert!(claude_content.is_ok(), "claude target should exist");
+    let codex_content = std::fs::read_to_string(temp.path().join(CODEX_TARGET));
+    assert!(codex_content.is_ok(), "codex target should exist");
+
+    assert!(
+        claude_content
+            .as_deref()
+            .is_ok_and(|content| content.contains(r#""statusMessage": "Checking command policy""#))
+    );
+    assert!(
+        codex_content
+            .as_deref()
+            .is_ok_and(|content| content.contains(r#""statusMessage": "Checking command policy""#))
+    );
+}
+
+#[test]
 fn enabled_flag_is_not_emitted_into_platform_native_fields() {
     let yaml = r"
 version: 1
@@ -348,6 +439,41 @@ hooks:
                     "command": "hook_bridge run --platform codex --rule-id r1",
                     "timeout_sec": 30,
                     "stopReason": "denied",
+                }]
+            })]
+        )])
+    );
+}
+
+#[test]
+fn collect_platform_hooks_emits_status_message() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+    status_message: Checking command policy
+";
+    let config_result = parse_and_normalize("/tmp/cfg.yaml".into(), yaml);
+    assert!(config_result.is_ok(), "config should parse");
+    let Ok(config) = config_result else {
+        return;
+    };
+    let generation = build_generation_input(&config);
+    let codex_hooks = collect_platform_hooks(&generation, Platform::Codex);
+
+    assert_eq!(
+        codex_hooks,
+        BTreeMap::from([(
+            "PreToolUse".to_string(),
+            vec![serde_json::json!({
+                "hooks": [{
+                    "type": "command",
+                    "command": "hook_bridge run --platform codex --rule-id r1",
+                    "statusMessage": "Checking command policy",
+                    "id": "r1",
+                    "timeout_sec": 30,
                 }]
             })]
         )])

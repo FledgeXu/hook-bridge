@@ -11,6 +11,7 @@ pub struct PlatformGenerationRule {
     pub event: String,
     pub native_event: String,
     pub command: String,
+    pub status_message: Option<String>,
     pub matcher: Option<String>,
     pub timeout_field: String,
     pub timeout_value: u64,
@@ -42,6 +43,7 @@ pub fn build_generation_input(normalized: &NormalizedConfig) -> PlatformGenerati
                         event: rule.event.clone(),
                         native_event: rule.event.clone(),
                         command: build_run_command(platform, &hook.id),
+                        status_message: hook.status_message.clone(),
                         matcher: rule.matcher.clone(),
                         timeout_field: capability::timeout_field_name(platform).to_string(),
                         timeout_value: rule.timeout_sec,
@@ -84,6 +86,12 @@ fn platform_rule_to_json(rule: &PlatformGenerationRule) -> serde_json::Value {
         "command".to_string(),
         serde_json::Value::String(rule.command.clone()),
     );
+    if let Some(status_message) = &rule.status_message {
+        handler.insert(
+            "statusMessage".to_string(),
+            serde_json::Value::String(status_message.clone()),
+        );
+    }
     handler.insert(
         "id".to_string(),
         serde_json::Value::String(rule.rule_id.clone()),

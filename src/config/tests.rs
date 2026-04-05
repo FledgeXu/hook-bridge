@@ -140,6 +140,48 @@ hooks:
 }
 
 #[test]
+fn accepts_top_level_status_message() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    status_message: Checking command policy
+";
+
+    let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+    assert!(config_result.is_ok(), "config should parse");
+    let Ok(config) = config_result else {
+        return;
+    };
+    let maybe_rule = config.hooks.iter().find(|hook| hook.id == "r1");
+    assert!(maybe_rule.is_some(), "rule must exist");
+    let Some(rule) = maybe_rule else {
+        return;
+    };
+
+    assert_eq!(
+        rule.status_message.as_deref(),
+        Some("Checking command policy")
+    );
+}
+
+#[test]
+fn rejects_empty_status_message() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    status_message: '   '
+";
+
+    assert_validation_error_contains(yaml, "field 'status_message' must not be empty");
+}
+
+#[test]
 fn platform_override_replaces_common_fields() {
     let yaml = r"
 version: 1
@@ -587,6 +629,16 @@ hooks:
       codex:
         decision: stop
 ";
+    let invalid_platform_status_message = r"
+version: 1
+hooks:
+  - id: r2
+    event: before_command
+    command: echo one
+    platforms:
+      codex:
+        status_message: hidden
+";
 
     assert_validation_error_contains(unknown, "is not recognized in hook schema");
     assert_validation_error_contains(no_platforms, "does not map to any platform");
@@ -595,5 +647,9 @@ hooks:
     assert_validation_error_contains(
         invalid_platform_field,
         "field 'platforms.codex.decision' is not supported for event 'PreToolUse'",
+    );
+    assert_validation_error_contains(
+        invalid_platform_status_message,
+        "field 'platforms.codex.status_message' is not supported for event 'PreToolUse'",
     );
 }

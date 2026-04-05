@@ -33,6 +33,8 @@ pub struct RawHookRule {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub status_message: Option<String>,
+    #[serde(default)]
     pub matcher: Option<String>,
     #[serde(default)]
     pub shell: Option<String>,

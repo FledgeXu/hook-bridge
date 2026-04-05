@@ -17,6 +17,7 @@ pub struct NormalizedConfig {
 pub struct NormalizedHook {
     pub id: String,
     pub description: Option<String>,
+    pub status_message: Option<String>,
     pub claude: Option<PlatformRule>,
     pub codex: Option<PlatformRule>,
 }
@@ -139,6 +140,10 @@ fn validate_and_normalize(
         hooks.push(NormalizedHook {
             id: raw_rule.id,
             description: raw_rule.description,
+            status_message: normalize_status_message(
+                raw_rule.status_message.as_deref(),
+                "status_message",
+            )?,
             claude,
             codex,
         });
@@ -206,7 +211,6 @@ fn build_platform_rule(
         .as_ref()
         .and_then(|block| block.matcher.clone())
         .or_else(|| raw_rule.matcher.clone());
-
     let shell = override_block
         .as_ref()
         .and_then(|block| block.shell.clone())
@@ -314,6 +318,22 @@ fn is_valid_rule_id(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-'))
+}
+
+fn normalize_status_message(
+    value: Option<&str>,
+    field_name: &str,
+) -> Result<Option<String>, HookBridgeError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(HookBridgeError::ConfigValidation {
+            message: format!("field '{field_name}' must not be empty"),
+        });
+    }
+    Ok(Some(trimmed.to_string()))
 }
 
 fn validate_extra_fields(

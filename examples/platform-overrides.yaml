@@ -8,6 +8,7 @@ hooks:
   - id: guard.destructive.commands
     description: Block obviously destructive shell commands with platform-native messages.
     event: before_command
+    status_message: Checking command safety policy
     matcher: "^(rm(\\s+-[A-Za-z-]*[rf][A-Za-z-]*)?\\b|git\\s+reset\\s+--hard\\b|git\\s+checkout\\s+--\\b)"
     command: |
       printf '%s\n' 'dangerous command rejected by hook_bridge'
