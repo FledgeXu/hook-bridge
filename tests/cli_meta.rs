@@ -3,6 +3,7 @@ use clap::Parser;
 use predicates::prelude::*;
 
 use hook_bridge::cli::{Cli, Command as CliCommand, DEFAULT_CONFIG_PATH};
+use hook_bridge::platform::Platform;
 
 #[test]
 fn help_exits_with_success_and_writes_stdout() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,6 +60,43 @@ fn generate_uses_default_config_argument_when_omitted() {
         return;
     };
     assert_eq!(args.config, std::path::PathBuf::from(DEFAULT_CONFIG_PATH));
+    assert_eq!(args.platform, None);
+}
+
+#[test]
+fn generate_parses_optional_platform_argument() {
+    let parse_result = Cli::try_parse_from(["hook_bridge", "generate", "--platform", "codex"]);
+    assert!(
+        parse_result.is_ok(),
+        "generate should parse with --platform codex"
+    );
+    let Ok(cli) = parse_result else {
+        return;
+    };
+
+    let CliCommand::Generate(args) = cli.command else {
+        return;
+    };
+    assert_eq!(args.config, std::path::PathBuf::from(DEFAULT_CONFIG_PATH));
+    assert_eq!(args.platform, Some(Platform::Codex));
+}
+
+#[test]
+fn generate_rejects_invalid_platform_argument() -> Result<(), Box<dyn std::error::Error>> {
+    let mut command = Command::cargo_bin("hook_bridge")?;
+
+    command
+        .arg("generate")
+        .arg("--platform")
+        .arg("invalid")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::starts_with(
+            "error: invalid value 'invalid' for '--platform <PLATFORM>'",
+        ));
+
+    Ok(())
 }
 
 #[test]

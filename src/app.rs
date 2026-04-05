@@ -84,6 +84,7 @@ mod tests {
         let cli = Cli {
             command: Command::Generate(GenerateArgs {
                 config: "hook-bridge.yaml".into(),
+                platform: None,
             }),
         };
 

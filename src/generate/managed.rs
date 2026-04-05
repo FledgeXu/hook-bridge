@@ -23,9 +23,9 @@ pub struct ManagedMetadata {
 /// Returns filesystem and file-conflict errors while checking target files.
 pub fn ensure_generation_targets_are_writable(
     runtime: &dyn Runtime,
-    platforms: [Platform; 2],
+    platforms: &[Platform],
 ) -> Result<(), HookBridgeError> {
-    for platform in platforms {
+    for &platform in platforms {
         ensure_no_unmanaged_conflict(runtime, target_path(platform))?;
     }
     Ok(())

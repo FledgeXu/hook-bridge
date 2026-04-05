@@ -14,11 +14,14 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 ## Maintain by Robot
 
 ### File Index And Description
-- `src/cli.rs`: CLI argument definitions, including the default `hook-bridge.yaml` config path for `generate`.
+- `src/app.rs`: Application command dispatch, runtime abstraction wiring, and app-level routing tests.
+- `src/cli.rs`: CLI argument definitions, including the default `hook-bridge.yaml` config path and optional single-platform filter for `generate`.
 - `src/config/schema.rs`: YAML schema definitions for top-level defaults, hooks, and platform overrides.
 - `src/config/normalize.rs`: Config validation and normalization into platform-specific runtime rules.
 - `src/config/tests.rs`: Validation and normalization tests for config parsing rules.
 - `src/generate/build.rs`: Converts normalized hooks into Claude/Codex managed hook handler JSON.
+- `src/generate/managed.rs`: Managed-file metadata helpers, target-path mapping, and conflict preflight checks for generated hook outputs.
+- `src/generate/mod.rs`: Executes `generate`, including config loading, target-platform selection, conflict preflight, and managed file writes.
 - `src/generate/tests.rs`: Shared helpers and submodule wiring for generation tests.
 - `src/generate/tests/generation_core.rs`: Generation tests for rule expansion, event mapping, and managed hook output fields.
 - `src/generate/tests/managed_files.rs`: Generation tests for managed file conflicts, metadata validation, and writable-target checks.
@@ -34,8 +37,11 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - `src/run/tests/retry_state.rs`: Runtime tests for retry-state persistence, guard behavior, and execute-rule retry updates.
 - `src/runtime/fs.rs`: Filesystem abstraction implementations plus atomic-write helpers and filesystem-focused tests.
 - `src/runtime/process.rs`: Process runner implementation, child cleanup behavior, and process execution tests.
-- `tests/cli_meta.rs`: CLI parsing and top-level parameter validation tests.
-- `tests/cli_generate.rs`: Integration tests for `generate`, including default config path behavior.
+- `tests/cli_meta.rs`: CLI parsing and top-level parameter validation tests, including `generate --platform` parsing failures and defaults.
+- `tests/cli_generate.rs`: Shared helpers and submodule wiring for `generate` integration tests.
+- `tests/cli_generate/basic.rs`: Core `generate` integration tests for default config handling, managed writes, overwrite behavior, and no-partial-output conflicts.
+- `tests/cli_generate/platform_filter.rs`: `generate --platform` integration tests covering selected-target writes, conflict scope, and untouched unselected files.
+- `tests/cli_generate/events_and_errors.rs`: `generate` integration tests for config error exit codes and native event-name output behavior.
 - `tests/cli_run.rs`: Shared helpers and submodule wiring for `run` integration tests.
 - `tests/cli_run/basic.rs`: `run` integration tests for core execution, managed config resolution, and basic failure handling.
 - `tests/cli_run/platform_outputs.rs`: `run` integration tests for Claude/Codex protocol translations and payload validation.

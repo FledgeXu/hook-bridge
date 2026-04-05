@@ -27,6 +27,9 @@ pub enum Command {
 pub struct GenerateArgs {
     #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
     pub config: PathBuf,
+
+    #[arg(long)]
+    pub platform: Option<Platform>,
 }
 
 #[derive(Debug, clap::Args)]

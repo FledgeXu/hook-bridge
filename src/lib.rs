@@ -324,6 +324,7 @@ mod tests {
         let cli = crate::cli::Cli {
             command: crate::cli::Command::Generate(crate::cli::GenerateArgs {
                 config: "missing.yaml".into(),
+                platform: None,
             }),
         };
 

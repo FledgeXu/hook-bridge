@@ -246,6 +246,7 @@ hooks:
 
     let args = GenerateArgs {
         config: PathBuf::from("hook-bridge.yaml"),
+        platform: None,
     };
     let runtime = crate::runtime::RealRuntime::default();
 

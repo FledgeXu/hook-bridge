@@ -34,11 +34,16 @@ pub fn execute(args: &GenerateArgs, runtime: &dyn Runtime) -> Result<(), HookBri
     let yaml = runtime.fs().read_to_string(&args.config)?;
     let source_config = normalize_config_path(&args.config)?;
     let normalized = parse_and_normalize(source_config, &yaml)?;
+    let target_platforms = args.platform.map_or_else(
+        || vec![Platform::Claude, Platform::Codex],
+        |platform| vec![platform],
+    );
 
-    ensure_generation_targets_are_writable(runtime, [Platform::Claude, Platform::Codex])?;
+    ensure_generation_targets_are_writable(runtime, &target_platforms)?;
 
-    write_platform_file(runtime, &normalized, Platform::Claude)?;
-    write_platform_file(runtime, &normalized, Platform::Codex)?;
+    for platform in target_platforms {
+        write_platform_file(runtime, &normalized, platform)?;
+    }
 
     Ok(())
 }

@@ -72,7 +72,7 @@ fn preflight_generation_targets_rejects_any_unmanaged_target() {
     assert!(matches!(
         ensure_generation_targets_are_writable(
             &crate::runtime::RealRuntime::default(),
-            [Platform::Claude, Platform::Codex]
+            &[Platform::Claude, Platform::Codex]
         ),
         Err(crate::error::HookBridgeError::FileConflict { path })
             if path == Path::new(CODEX_TARGET)
@@ -100,7 +100,7 @@ fn preflight_generation_targets_allows_missing_targets() {
     assert_eq!(
         ensure_generation_targets_are_writable(
             &crate::runtime::RealRuntime::default(),
-            [Platform::Claude, Platform::Codex]
+            &[Platform::Claude, Platform::Codex]
         ),
         Ok(())
     );
@@ -140,6 +140,7 @@ hooks:
         execute(
             &GenerateArgs {
                 config: config_path.clone(),
+                platform: None,
             },
             &crate::runtime::RealRuntime::default(),
         ),
