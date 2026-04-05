@@ -20,8 +20,8 @@ clippy:
 
 verify:
 	cargo fmt --check
+	./scripts/check_file_lines.sh
 	cargo clippy --all-targets --all-features -- -D warnings
 	cargo nextest run --workspace --all-features
 	cargo llvm-cov --workspace --all-features --lib --tests --fail-under-lines 95 --summary-only
 	cargo mutants --test-tool=nextest --jobs 4
-	./scripts/check_file_lines.sh
