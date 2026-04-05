@@ -1,5 +1,7 @@
 /target
 impl-docs/
+.codex/hooks.json
+.claude/settings.json
 
 
 ### Python ###

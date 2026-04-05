@@ -36,7 +36,7 @@ DEFAULT_UNTRACKED_CONTENT_PATTERNS = (
     "Justfile,CMakeLists.txt,Jenkinsfile"
 )
 IGNORED_FILES = {"package-lock.json"}
-REVIEW_TRIGGER_FILES = {".codex/hooks/review_prompt.md"}
+REVIEW_TRIGGER_FILES = {"scripts/hooks/review_prompt.md"}
 PROMPT_RULES = """
 # 输出要求
 
