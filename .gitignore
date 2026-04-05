@@ -2,6 +2,7 @@
 impl-docs/
 .codex/hooks.json
 .claude/settings.json
+mutants.*/
 
 
 ### Python ###
