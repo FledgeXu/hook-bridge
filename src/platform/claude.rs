@@ -480,7 +480,7 @@ mod tests {
     fn translates_exit_code_two_permission_request_to_deny_decision() {
         let result = ExecutionResult {
             status: InternalStatus::Block,
-            message: Some("command exited with non-zero status 2".to_string()),
+            message: Some("command failed with exit code 2: deny permission".to_string()),
             system_message: None,
             exit_code: Some(2),
             raw_stdout: Vec::new(),

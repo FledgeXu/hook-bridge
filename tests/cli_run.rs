@@ -925,7 +925,7 @@ hooks:
         assert_eq!(
             parsed.get("last_error"),
             Some(&serde_json::Value::from(
-                "command exited with non-zero status 1"
+                "command failed with exit code 1: exit 1"
             ))
         );
     }
@@ -1494,8 +1494,80 @@ hooks:
         .assert()
         .success()
         .stdout(predicate::str::contains(r#""decision":"block""#))
-        .stdout(predicate::str::contains("non-zero status 9"))
-        .stdout(predicate::str::contains("ignore me").not());
+        .stdout(predicate::str::contains("command failed with exit code 9"))
+        .stdout(predicate::str::contains(r"stderr (tail):").not())
+        .stdout(predicate::str::contains("stdout (tail):"))
+        .stdout(predicate::str::contains("cat <<'EOF'"))
+        .stdout(predicate::str::contains("ignore me"));
+}
+
+#[test]
+fn stop_non_zero_exit_returns_command_and_output_summary() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let write_result = fs::write(
+        temp.path().join("hook-bridge.yaml"),
+        r"
+version: 1
+hooks:
+  - id: stop_fail
+    event: Stop
+    command: |
+      echo running make verify wrapper
+      echo cargo clippy failed >&2
+      exit 2
+    platforms:
+      claude:
+        enabled: false
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let gen_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        gen_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut gen_command) = gen_result else {
+        return;
+    };
+    gen_command
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--config")
+        .arg("hook-bridge.yaml")
+        .assert()
+        .success();
+
+    let payload = r#"{"hook_event_name":"Stop","session_id":"stop_fail","cwd":"."}"#;
+    let run_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        run_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut run_command) = run_result else {
+        return;
+    };
+    run_command
+        .current_dir(temp.path())
+        .arg("run")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--rule-id")
+        .arg("stop_fail")
+        .write_stdin(payload)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(r#""decision":"block""#))
+        .stdout(predicate::str::contains(
+            r#""reason":"command failed with exit code 2:"#,
+        ))
+        .stdout(predicate::str::contains("running make verify wrapper"))
+        .stdout(predicate::str::contains("cargo clippy failed"));
 }
 
 #[test]
@@ -1691,6 +1763,6 @@ hooks:
         .assert()
         .success()
         .stdout(predicate::str::contains(r#""decision":"block""#))
-        .stdout(predicate::str::contains("non-zero status 2"))
+        .stdout(predicate::str::contains("command failed with exit code 2"))
         .stderr(predicate::str::is_empty());
 }

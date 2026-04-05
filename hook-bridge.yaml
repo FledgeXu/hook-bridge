@@ -9,10 +9,11 @@ hooks:
     description: Run the workspace verification gate before allowing a stop event to finish.
     event: Stop
     command: |
-      if make verify 1>&2; then
-        exit 0
-      fi
-      printf '%s\n' '{"hook_bridge":{"kind":"block","reason":"请先修复静态检查失败项后再结束本轮任务。","system_message":"`make verify` failed. Review the output above, fix the issues, and rerun the verification gate."}}'
+      make verify
+      # if make verify 1>&2; then
+      #   exit 0
+      # fi
+      # printf '%s\n' '{"hook_bridge":{"kind":"block","reason":"请先修复静态检查失败项后再结束本轮任务。","system_message":"`make verify` failed. Review the output above, fix the issues, and rerun the verification gate."}}'
 
   - id: stop.auto-review
     description: Run the automated review gate before allowing a stop event to finish.

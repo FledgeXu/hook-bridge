@@ -220,19 +220,84 @@ fn run_user_command(
             bridge_output: None,
         })
     } else {
-        Ok(ExecutionResult {
-            status: InternalStatus::Block,
-            message: Some(format!(
-                "command exited with non-zero status {}",
-                output.status_code
-            )),
-            system_message: Some("hook_bridge command returned non-zero exit code".to_string()),
-            exit_code: Some(output.status_code),
-            raw_stdout: output.stdout,
-            raw_stderr: output.stderr,
-            bridge_output: None,
-        })
+        Ok(non_zero_exit_result(rule, output))
     }
+}
+
+const NON_ZERO_OUTPUT_LINE_LIMIT: usize = 12;
+const NON_ZERO_OUTPUT_CHAR_LIMIT: usize = 600;
+
+fn non_zero_exit_result(
+    rule: &PlatformRule,
+    output: crate::runtime::process::ProcessOutput,
+) -> ExecutionResult {
+    ExecutionResult {
+        status: InternalStatus::Block,
+        message: Some(format_non_zero_exit_summary(
+            &rule.command,
+            output.status_code,
+            &output.stdout,
+            &output.stderr,
+        )),
+        system_message: None,
+        exit_code: Some(output.status_code),
+        raw_stdout: output.stdout,
+        raw_stderr: output.stderr,
+        bridge_output: None,
+    }
+}
+
+fn format_non_zero_exit_summary(
+    command: &str,
+    exit_code: i32,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> String {
+    let mut summary = format!("command failed with exit code {exit_code}: {command}");
+
+    if let Some(stderr_summary) = summarize_output_stream("stderr", stderr) {
+        summary.push_str("\n\n");
+        summary.push_str(&stderr_summary);
+    }
+    if let Some(stdout_summary) = summarize_output_stream("stdout", stdout) {
+        summary.push_str("\n\n");
+        summary.push_str(&stdout_summary);
+    }
+
+    summary
+}
+
+fn summarize_output_stream(label: &str, bytes: &[u8]) -> Option<String> {
+    if bytes.is_empty() {
+        return None;
+    }
+
+    let text = match std::str::from_utf8(bytes) {
+        Ok(text) => text.trim(),
+        Err(_) => {
+            return Some(format!(
+                "{label} (tail):\n<non-UTF-8 output: {} bytes>",
+                bytes.len()
+            ));
+        }
+    };
+
+    if text.is_empty() {
+        return None;
+    }
+
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.len().saturating_sub(NON_ZERO_OUTPUT_LINE_LIMIT);
+    let mut tail = lines.get(start..).unwrap_or(&[]).join("\n");
+
+    let char_count = tail.chars().count();
+    if char_count > NON_ZERO_OUTPUT_CHAR_LIMIT {
+        let start = char_count - NON_ZERO_OUTPUT_CHAR_LIMIT;
+        tail = tail.chars().skip(start).collect();
+        tail.insert_str(0, "...");
+    }
+
+    Some(format!("{label} (tail):\n{tail}"))
 }
 
 fn codex_plaintext_success_result(

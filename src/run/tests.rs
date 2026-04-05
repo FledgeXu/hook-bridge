@@ -16,9 +16,10 @@ use crate::runtime::process::{FakeProcessRunner, ProcessOutput, ProcessRequest, 
 
 use super::{
     BridgeOutput, ExecutionResult, InternalStatus, RetryState, RuntimeContext, command_env,
-    execute, execute_rule, load_retry_state, now_epoch_sec, parse_runtime_context,
-    persist_retry_state, retry_guard_engaged, retry_guard_result, retry_state_path,
-    run_user_command, translate_output, update_retry_state,
+    execute, execute_rule, format_non_zero_exit_summary, load_retry_state, now_epoch_sec,
+    parse_runtime_context, persist_retry_state, retry_guard_engaged, retry_guard_result,
+    retry_state_path, run_user_command, summarize_output_stream, translate_output,
+    update_retry_state,
 };
 
 struct TestRuntime {
@@ -885,13 +886,66 @@ fn run_user_command_maps_non_zero_exit_to_block_result() {
     assert_eq!(result.as_ref().map(|value| value.exit_code), Ok(Some(23)));
     assert_eq!(
         result.as_ref().map(|value| value.message.clone()),
-        Ok(Some("command exited with non-zero status 23".to_string()))
+        Ok(Some(
+            "command failed with exit code 23: echo ok\n\nstderr (tail):\nerr\n\nstdout (tail):\nout"
+                .to_string()
+        ))
     );
     assert_eq!(
         result.as_ref().map(|value| value.system_message.clone()),
-        Ok(Some(
-            "hook_bridge command returned non-zero exit code".to_string()
-        ))
+        Ok(None)
+    );
+}
+
+#[test]
+fn format_non_zero_exit_summary_prefers_stderr_then_stdout_tail() {
+    let summary = format_non_zero_exit_summary(
+        "make verify",
+        2,
+        b"stdout line 1\nstdout line 2\n",
+        b"stderr line 1\nstderr line 2\n",
+    );
+
+    assert!(summary.contains("command failed with exit code 2: make verify"));
+    let stderr_index = summary.find("stderr (tail):\nstderr line 1\nstderr line 2");
+    let stdout_index = summary.find("stdout (tail):\nstdout line 1\nstdout line 2");
+    assert!(stderr_index.is_some(), "stderr summary should be included");
+    assert!(stdout_index.is_some(), "stdout summary should be included");
+    assert!(
+        stderr_index < stdout_index,
+        "stderr summary should appear before stdout summary"
+    );
+}
+
+#[test]
+fn summarize_output_stream_truncates_to_tail_and_handles_non_utf8() {
+    let long_stream = (0..20)
+        .map(|index| format!("line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let summary = summarize_output_stream("stderr", long_stream.as_bytes());
+
+    assert!(
+        summary.is_some(),
+        "summary should be generated for text output"
+    );
+    let Some(summary) = summary else {
+        return;
+    };
+    assert!(!summary.contains("line 0"), "older lines should be trimmed");
+    assert!(
+        summary.contains("line 8"),
+        "tail should retain recent lines"
+    );
+    assert!(
+        summary.contains("line 19"),
+        "tail should include the latest line"
+    );
+
+    let binary = summarize_output_stream("stdout", &[0xff, 0x00, 0xfe]);
+    assert_eq!(
+        binary,
+        Some("stdout (tail):\n<non-UTF-8 output: 3 bytes>".to_string())
     );
 }
 
