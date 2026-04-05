@@ -1216,7 +1216,7 @@ fn run_user_command_promotes_plaintext_stdout_to_codex_additional_context() {
 }
 
 #[test]
-fn run_user_command_rejects_plaintext_stdout_for_codex_stop() {
+fn run_user_command_ignores_plaintext_stdout_for_codex_stop() {
     let temp_result = tempfile::tempdir();
     assert!(temp_result.is_ok(), "tempdir creation should succeed");
     let Ok(temp) = temp_result else {
@@ -1245,10 +1245,18 @@ fn run_user_command_rejects_plaintext_stdout_for_codex_stop() {
         ..sample_rule()
     };
 
-    assert!(matches!(
+    assert_eq!(
         run_user_command(&runtime, &rule, &context),
-        Err(HookBridgeError::PlatformProtocol { .. })
-    ));
+        Ok(ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: b"keep-going\n".to_vec(),
+            raw_stderr: Vec::new(),
+            bridge_output: None,
+        })
+    );
 }
 
 #[test]

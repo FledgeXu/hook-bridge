@@ -1571,7 +1571,7 @@ hooks:
 }
 
 #[test]
-fn plaintext_stdout_is_invalid_for_codex_stop() {
+fn plaintext_stdout_is_ignored_for_codex_stop() {
     let temp_result = tempfile::tempdir();
     assert!(temp_result.is_ok(), "tempdir creation should succeed");
     let Ok(temp) = temp_result else {
@@ -1627,12 +1627,8 @@ hooks:
         .arg("r_stop_plain")
         .write_stdin(payload)
         .assert()
-        .failure()
-        .code(8)
-        .stderr(predicate::str::contains("platform protocol error"))
-        .stderr(predicate::str::contains(
-            "does not support plain-text success stdout",
-        ))
+        .success()
+        .stderr(predicate::str::is_empty())
         .stdout(predicate::str::is_empty());
 }
 

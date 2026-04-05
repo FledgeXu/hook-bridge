@@ -201,7 +201,7 @@ fn run_user_command(
             });
         }
 
-        if let Some(result) = codex_plaintext_success_result(context, &output.stdout)? {
+        if let Some(result) = codex_plaintext_success_result(context, &output.stdout) {
             return Ok(ExecutionResult {
                 raw_stdout: output.stdout,
                 raw_stderr: output.stderr,
@@ -303,33 +303,36 @@ fn summarize_output_stream(label: &str, bytes: &[u8]) -> Option<String> {
 fn codex_plaintext_success_result(
     context: &RuntimeContext,
     stdout: &[u8],
-) -> Result<Option<ExecutionResult>, HookBridgeError> {
+) -> Option<ExecutionResult> {
     if context.platform != Platform::Codex {
-        return Ok(None);
+        return None;
     }
 
     let text = match std::str::from_utf8(stdout) {
         Ok(text) => text.trim_end_matches(['\r', '\n']),
-        Err(_) => return Ok(None),
+        Err(_) => return None,
     };
 
     if text.is_empty() {
-        return Ok(None);
+        return None;
     }
 
     match context.event.as_str() {
-        "SessionStart" | "UserPromptSubmit" => Ok(Some(execution_result_from_bridge_output(
+        "SessionStart" | "UserPromptSubmit" => Some(execution_result_from_bridge_output(
             BridgeOutput::AdditionalContext {
                 text: text.to_string(),
             },
-        ))),
-        "Stop" => Err(HookBridgeError::PlatformProtocol {
-            message: format!(
-                "codex event '{}' does not support plain-text success stdout; use structured bridge JSON or an empty response",
-                context.raw_event
-            ),
+        )),
+        "Stop" => Some(ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: None,
         }),
-        _ => Ok(None),
+        _ => None,
     }
 }
 

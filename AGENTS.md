@@ -17,6 +17,7 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - `AGENTS.md`
 - `hook-bridge.yaml`
 - `src/main.rs`
+- `src/platform/codex.rs`
 - `src/platform/claude.rs`
 - `src/run/mod.rs`
 - `src/run/tests.rs`

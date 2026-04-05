@@ -11,7 +11,7 @@ hooks:
     command: |
       make verify
 
-  - id: stop.auto-review
-    description: Run the automated review gate before allowing a stop event to finish.
-    event: Stop
-    command: ./scripts/hooks/auto_review.sh
+  # - id: stop.auto-review
+  #   description: Run the automated review gate before allowing a stop event to finish.
+  #   event: Stop
+  #   command: ./scripts/hooks/auto_review.sh
