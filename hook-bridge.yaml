@@ -10,7 +10,13 @@ hooks:
     event: Stop
     status_message: Verifying...
     command: |
-      make verify
+      if git diff --name-only --cached --diff-filter=ACMR | grep -q '\.rs$' \
+        || git diff --name-only --diff-filter=ACMR | grep -q '\.rs$' \
+        || git ls-files --others --exclude-standard | grep -q '\.rs$'; then
+        make verify
+      else
+        echo "No Rust file changes detected; skipping verification."
+      fi
 
   - id: stop.auto-review
     description: Run the automated review gate before allowing a stop event to finish.
