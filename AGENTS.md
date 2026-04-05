@@ -30,8 +30,8 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - `src/config/tests.rs`: Validation and normalization tests for config parsing rules.
 - `src/error.rs`: Domain error types and stable process exit-code mapping for CLI and runtime failures.
 - `src/generate/build.rs`: Converts normalized hooks into Claude/Codex managed hook handler JSON.
-- `src/generate/managed.rs`: Managed-file metadata helpers, target-path mapping, and conflict preflight checks for generated hook outputs.
-- `src/generate/mod.rs`: Executes `generate`, including config loading, target-platform selection, conflict preflight, and managed file writes.
+- `src/generate/managed.rs`: Managed-file metadata helpers, target-path mapping, runtime-cwd-aware path resolution, and conflict preflight checks for generated hook outputs.
+- `src/generate/mod.rs`: Executes `generate`, including cwd-consistent config/target path normalization, target-platform selection, conflict preflight, and managed file writes.
 - `src/generate/tests.rs`: Shared helpers and submodule wiring for generation tests.
 - `src/generate/tests/generation_core.rs`: Generation tests for rule expansion, event mapping, and managed hook output fields.
 - `src/generate/tests/managed_files.rs`: Generation tests for managed file conflicts, metadata validation, and writable-target checks.
@@ -50,7 +50,7 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - `src/run/tests/context_execute.rs`: Runtime tests for context parsing, execute-path validation, and shared helper behavior.
 - `src/run/tests/retry_state.rs`: Runtime tests for retry-state persistence, guard behavior, and execute-rule retry updates.
 - `src/runtime/clock.rs`: Clock abstraction with system and fixed implementations for deterministic retry-state tests.
-- `src/runtime/fs.rs`: Filesystem abstraction implementations plus atomic-write helpers and filesystem-focused tests.
+- `src/runtime/fs.rs`: Filesystem abstraction implementations, current-directory lookup, atomic-write helpers, and filesystem-focused tests.
 - `src/runtime/io.rs`: Stdio abstraction and helpers for reading stdin plus writing stdout/stderr with test doubles.
 - `src/runtime/mod.rs`: Runtime trait and production wiring for filesystem, clock, process, and stdio dependencies.
 - `src/runtime/process.rs`: Process runner implementation, child cleanup behavior, and process execution tests.

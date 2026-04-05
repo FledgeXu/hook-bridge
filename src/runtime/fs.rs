@@ -6,6 +6,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crate::error::HookBridgeError;
 
 pub trait FileSystem {
+    /// Returns the absolute current working directory used for relative path resolution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the current working directory cannot be resolved.
+    fn current_dir(&self) -> Result<PathBuf, HookBridgeError>;
     /// Checks whether the given path exists.
     ///
     /// # Errors
@@ -48,6 +54,12 @@ pub trait FileSystem {
 pub struct OsFileSystem;
 
 impl FileSystem for OsFileSystem {
+    fn current_dir(&self) -> Result<PathBuf, HookBridgeError> {
+        std::env::current_dir().map_err(|error| HookBridgeError::Process {
+            message: format!("failed to resolve current working directory: {error}"),
+        })
+    }
+
     fn exists(&self, path: &Path) -> Result<bool, HookBridgeError> {
         match fs_err::metadata(path) {
             Ok(_) => Ok(true),
@@ -118,6 +130,10 @@ impl FakeFileSystem {
 }
 
 impl FileSystem for FakeFileSystem {
+    fn current_dir(&self) -> Result<PathBuf, HookBridgeError> {
+        Ok(PathBuf::from("/tmp/hook-bridge-fake-fs"))
+    }
+
     fn exists(&self, path: &Path) -> Result<bool, HookBridgeError> {
         Ok(self.existing.iter().any(|item| item == path))
     }
@@ -223,6 +239,10 @@ mod tests {
     }
 
     impl FileSystem for TrackingFileSystem {
+        fn current_dir(&self) -> Result<PathBuf, HookBridgeError> {
+            Ok(PathBuf::from("/tmp/hook-bridge-tracking-fs"))
+        }
+
         fn exists(&self, path: &std::path::Path) -> Result<bool, HookBridgeError> {
             Ok(self.files.borrow().contains_key(path))
         }
@@ -311,6 +331,7 @@ mod tests {
         let fs = FakeFileSystem::default();
         let path = PathBuf::from("/tmp/mock");
 
+        assert!(fs.current_dir().is_ok_and(|cwd| cwd.is_absolute()));
         assert_eq!(fs.read_to_string(&path), Ok(String::new()));
         assert_eq!(fs.write_all(&path, b"ok"), Ok(()));
         assert_eq!(fs.create_dir_all(&path), Ok(()));

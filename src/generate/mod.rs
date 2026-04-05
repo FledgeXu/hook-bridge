@@ -31,43 +31,41 @@ struct ManagedHooksFile {
 ///
 /// Returns validation, conflict, serialization, and filesystem errors.
 pub fn execute(args: &GenerateArgs, runtime: &dyn Runtime) -> Result<(), HookBridgeError> {
-    let yaml = runtime.fs().read_to_string(&args.config)?;
-    let source_config = normalize_config_path(&args.config)?;
+    let base_dir = runtime.fs().current_dir()?;
+    let source_config = normalize_path(&args.config, &base_dir);
+    let yaml = runtime.fs().read_to_string(&source_config)?;
     let normalized = parse_and_normalize(source_config, &yaml)?;
     let target_platforms = args.platform.map_or_else(
         || vec![Platform::Claude, Platform::Codex],
         |platform| vec![platform],
     );
 
-    ensure_generation_targets_are_writable(runtime, &target_platforms)?;
+    ensure_generation_targets_are_writable(runtime, &target_platforms, &base_dir)?;
 
     for platform in target_platforms {
-        write_platform_file(runtime, &normalized, platform)?;
+        write_platform_file(runtime, &normalized, platform, &base_dir)?;
     }
 
     Ok(())
 }
 
-fn normalize_config_path(path: &Path) -> Result<PathBuf, HookBridgeError> {
+fn normalize_path(path: &Path, base_dir: &Path) -> PathBuf {
     if path.is_absolute() {
-        return Ok(path.to_path_buf());
+        return path.to_path_buf();
     }
-
-    let current_dir = std::env::current_dir().map_err(|error| HookBridgeError::Process {
-        message: format!("failed to resolve current working directory: {error}"),
-    })?;
-    Ok(current_dir.join(path))
+    base_dir.join(path)
 }
 
 fn write_platform_file(
     runtime: &dyn Runtime,
     normalized: &crate::config::NormalizedConfig,
     platform: Platform,
+    base_dir: &Path,
 ) -> Result<(), HookBridgeError> {
     let hooks = build::collect_platform_hooks(&build_generation_input(normalized), platform);
-    let target = target_path(platform);
+    let target = normalize_path(target_path(platform), base_dir);
 
-    managed::ensure_no_unmanaged_conflict(runtime, target)?;
+    managed::ensure_no_unmanaged_conflict(runtime, &target)?;
 
     let file = ManagedHooksFile {
         metadata: ManagedMetadata {
@@ -86,7 +84,7 @@ fn write_platform_file(
             ),
         })?;
 
-    atomic_write(runtime.fs(), target, &payload)
+    atomic_write(runtime.fs(), &target, &payload)
 }
 
 #[cfg(test)]

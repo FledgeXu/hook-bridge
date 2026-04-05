@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::HookBridgeError;
 use crate::platform::Platform;
@@ -24,9 +24,10 @@ pub struct ManagedMetadata {
 pub fn ensure_generation_targets_are_writable(
     runtime: &dyn Runtime,
     platforms: &[Platform],
+    base_dir: &Path,
 ) -> Result<(), HookBridgeError> {
     for &platform in platforms {
-        ensure_no_unmanaged_conflict(runtime, target_path(platform))?;
+        ensure_no_unmanaged_conflict(runtime, &resolve_target_path(platform, base_dir))?;
     }
     Ok(())
 }
@@ -58,6 +59,14 @@ pub fn target_path(platform: Platform) -> &'static Path {
 }
 
 #[must_use]
+pub fn resolve_target_path(platform: Platform, base_dir: &Path) -> PathBuf {
+    if target_path(platform).is_absolute() {
+        return target_path(platform).to_path_buf();
+    }
+    base_dir.join(target_path(platform))
+}
+
+#[must_use]
 pub fn is_managed_content(content: &str) -> bool {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
         return false;
@@ -78,8 +87,9 @@ pub fn load_metadata(
     runtime: &dyn Runtime,
     platform: Platform,
 ) -> Result<ManagedMetadata, HookBridgeError> {
-    let path = target_path(platform);
-    let content = runtime.fs().read_to_string(path)?;
+    let base_dir = runtime.fs().current_dir()?;
+    let path = resolve_target_path(platform, &base_dir);
+    let content = runtime.fs().read_to_string(&path)?;
     let value: serde_json::Value =
         serde_json::from_str(&content).map_err(|error| HookBridgeError::PlatformProtocol {
             message: format!("invalid managed {} file JSON: {error}", platform.as_str()),

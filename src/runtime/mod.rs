@@ -3,6 +3,8 @@ pub mod fs;
 pub mod io;
 pub mod process;
 
+use std::path::PathBuf;
+
 use clock::{Clock, SystemClock};
 use fs::{FileSystem, OsFileSystem};
 use io::{Io, StdIo};
@@ -13,7 +15,7 @@ pub trait Runtime {
     fn clock(&self) -> &dyn Clock;
     fn process_runner(&self) -> &dyn ProcessRunner;
     fn io(&self) -> &dyn Io;
-    fn temp_dir(&self) -> std::path::PathBuf;
+    fn temp_dir(&self) -> PathBuf;
 }
 
 #[derive(Debug, Default)]
@@ -41,7 +43,7 @@ impl Runtime for RealRuntime {
         &self.io
     }
 
-    fn temp_dir(&self) -> std::path::PathBuf {
+    fn temp_dir(&self) -> PathBuf {
         std::env::temp_dir()
     }
 }

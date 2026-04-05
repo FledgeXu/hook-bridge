@@ -330,41 +330,22 @@ hooks:
 #[test]
 fn normalize_and_target_paths_are_stable() {
     let absolute = Path::new("/tmp/hook-bridge.yaml");
+    let runtime_cwd = PathBuf::from("/tmp/runtime-cwd");
 
-    assert_eq!(normalize_config_path(absolute), Ok(absolute.to_path_buf()));
+    assert_eq!(
+        normalize_path(absolute, &runtime_cwd),
+        absolute.to_path_buf()
+    );
     assert_eq!(target_path(Platform::Claude), Path::new(CLAUDE_TARGET));
     assert_eq!(target_path(Platform::Codex), Path::new(CODEX_TARGET));
 }
 
 #[test]
-fn normalize_config_path_joins_relative_paths_from_current_directory() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
-        return;
-    };
-    let temp_result = tempfile::tempdir();
-    assert!(temp_result.is_ok(), "tempdir creation should succeed");
-    let Ok(temp) = temp_result else {
-        return;
-    };
-    let guard_result = CurrentDirGuard::enter(temp.path());
-    assert!(guard_result.is_ok(), "cwd switch should succeed");
-    let Ok(_guard) = guard_result else {
-        return;
-    };
-    let current_dir_result = std::env::current_dir();
-    assert!(
-        current_dir_result.is_ok(),
-        "current directory should resolve after cwd switch"
-    );
-    let Ok(current_dir) = current_dir_result else {
-        return;
-    };
-
+fn normalize_config_path_joins_relative_paths_from_runtime_current_directory() {
+    let runtime_cwd = PathBuf::from("/tmp/runtime-cwd");
     assert_eq!(
-        normalize_config_path(Path::new("hook-bridge.yaml")),
-        Ok(current_dir.join("hook-bridge.yaml"))
+        normalize_path(Path::new("hook-bridge.yaml"), &runtime_cwd),
+        PathBuf::from("/tmp/runtime-cwd").join("hook-bridge.yaml")
     );
 }
 
