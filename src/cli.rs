@@ -4,6 +4,8 @@ use clap::{Parser, Subcommand};
 
 use crate::platform::Platform;
 
+pub const DEFAULT_CONFIG_PATH: &str = "hook-bridge.yaml";
+
 #[derive(Debug, Parser)]
 #[command(
     name = "hook_bridge",
@@ -23,7 +25,7 @@ pub enum Command {
 
 #[derive(Debug, clap::Args)]
 pub struct GenerateArgs {
-    #[arg(long)]
+    #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
     pub config: PathBuf,
 }
 

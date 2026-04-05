@@ -109,6 +109,78 @@ hooks:
 }
 
 #[test]
+fn generate_command_uses_default_config_path() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let config_path = temp.path().join("hook-bridge.yaml");
+    let write_result = fs::write(
+        &config_path,
+        r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+",
+    );
+    assert!(write_result.is_ok(), "config file should be written");
+
+    let command_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        command_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut command) = command_result else {
+        return;
+    };
+
+    command
+        .current_dir(temp.path())
+        .arg("generate")
+        .assert()
+        .success();
+
+    assert!(
+        temp.path().join(".claude/settings.json").exists(),
+        "claude managed file should be generated"
+    );
+    assert!(
+        temp.path().join(".codex/hooks.json").exists(),
+        "codex managed file should be generated"
+    );
+}
+
+#[test]
+fn generate_command_without_default_config_reports_missing_file() {
+    let temp_result = tempfile::tempdir();
+    assert!(temp_result.is_ok(), "tempdir creation should succeed");
+    let Ok(temp) = temp_result else {
+        return;
+    };
+
+    let command_result = Command::cargo_bin("hook_bridge");
+    assert!(
+        command_result.is_ok(),
+        "binary should build for integration tests"
+    );
+    let Ok(mut command) = command_result else {
+        return;
+    };
+
+    command
+        .current_dir(temp.path())
+        .arg("generate")
+        .assert()
+        .failure()
+        .code(10)
+        .stderr(predicate::str::contains("hook-bridge.yaml"));
+}
+
+#[test]
 fn generate_command_rejects_non_managed_target_files() {
     let temp_result = tempfile::tempdir();
     assert!(temp_result.is_ok(), "tempdir creation should succeed");

@@ -1,5 +1,8 @@
 use assert_cmd::Command;
+use clap::Parser;
 use predicates::prelude::*;
+
+use hook_bridge::cli::{Cli, Command as CliCommand, DEFAULT_CONFIG_PATH};
 
 #[test]
 fn help_exits_with_success_and_writes_stdout() -> Result<(), Box<dyn std::error::Error>> {
@@ -42,17 +45,20 @@ fn invalid_flag_exits_with_parameter_error() -> Result<(), Box<dyn std::error::E
 }
 
 #[test]
-fn generate_requires_config_argument() -> Result<(), Box<dyn std::error::Error>> {
-    let mut command = Command::cargo_bin("hook_bridge")?;
+fn generate_uses_default_config_argument_when_omitted() {
+    let parse_result = Cli::try_parse_from(["hook_bridge", "generate"]);
+    assert!(
+        parse_result.is_ok(),
+        "generate should parse without --config"
+    );
+    let Ok(cli) = parse_result else {
+        return;
+    };
 
-    command
-        .arg("generate")
-        .assert()
-        .failure()
-        .code(2)
-        .stderr(predicate::str::contains("--config <CONFIG>"));
-
-    Ok(())
+    let CliCommand::Generate(args) = cli.command else {
+        return;
+    };
+    assert_eq!(args.config, std::path::PathBuf::from(DEFAULT_CONFIG_PATH));
 }
 
 #[test]
