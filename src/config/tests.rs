@@ -140,6 +140,23 @@ hooks:
 }
 
 #[test]
+fn rejects_codex_stop_fields_in_common_layer() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo one
+    stopReason: nope
+";
+
+    assert_validation_error_contains(
+        yaml,
+        "field 'stopReason' is platform-specific and must be set in 'platforms.codex.<field>'",
+    );
+}
+
+#[test]
 fn accepts_top_level_status_message() {
     let yaml = r"
 version: 1

@@ -498,6 +498,29 @@ mod tests {
     }
 
     #[test]
+    fn rejects_permission_decision_for_unsupported_event() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::PermissionDecision {
+                behavior: "allow".to_string(),
+                reason: Some("safe".to_string()),
+                updated_input: None,
+                additional_context: Some("note".to_string()),
+            }),
+        };
+
+        assert!(matches!(
+            translate_output(&context("Stop"), &result),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
+    }
+
+    #[test]
     fn rejects_stop_for_pre_tool_use_and_additional_context_for_unsupported_event() {
         let stop = ExecutionResult {
             status: InternalStatus::Stop,

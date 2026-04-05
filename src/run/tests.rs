@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::cli::RunArgs;
 use crate::config::PlatformRule;
 use crate::error::HookBridgeError;
-use crate::platform::{Platform, normalize_event_name};
+use crate::platform::Platform;
 use crate::runtime::Runtime;
 use crate::runtime::clock::{Clock, FixedClock};
 use crate::runtime::fs::{FakeFileSystem, FileSystem, OsFileSystem};
@@ -443,27 +443,6 @@ fn test_runtime_exposes_all_dependencies() {
         }),
         Ok(output) if output.status_code == 0
     ));
-}
-
-#[test]
-fn normalize_event_name_accepts_native_and_unified_values() {
-    assert_eq!(
-        normalize_event_name(Platform::Codex, "PreToolUse"),
-        Some("PreToolUse")
-    );
-    assert_eq!(
-        normalize_event_name(Platform::Claude, "PostToolUse"),
-        Some("PostToolUse")
-    );
-    assert_eq!(
-        normalize_event_name(Platform::Codex, "SessionStart"),
-        Some("SessionStart")
-    );
-    assert_eq!(
-        normalize_event_name(Platform::Claude, "before_command"),
-        Some("PreToolUse")
-    );
-    assert_eq!(normalize_event_name(Platform::Codex, "Notification"), None);
 }
 
 fn write_managed_hooks_file(root: &Path, source_config: &str) {
@@ -950,6 +929,27 @@ fn summarize_output_stream_truncates_to_tail_and_handles_non_utf8() {
 }
 
 #[test]
+fn summarize_output_stream_respects_exact_and_over_char_limits() {
+    let exact = "a".repeat(600);
+    assert_eq!(
+        summarize_output_stream("stderr", exact.as_bytes()),
+        Some(format!("stderr (tail):\n{exact}"))
+    );
+
+    let over = format!("{}{}", "0123456789".repeat(60), "tail");
+    let summary = summarize_output_stream("stderr", over.as_bytes());
+    assert!(
+        summary.is_some(),
+        "summary should be generated for long output"
+    );
+    let Some(summary) = summary else {
+        return;
+    };
+    assert!(summary.starts_with("stderr (tail):\n..."));
+    assert_eq!(summary, format!("stderr (tail):\n...{}", &over[4..]));
+}
+
+#[test]
 fn run_user_command_maps_spawn_and_timeout_errors_to_error_result() {
     let temp_result = tempfile::tempdir();
     assert!(temp_result.is_ok(), "tempdir creation should succeed");
@@ -990,7 +990,7 @@ fn run_user_command_parses_structured_bridge_output() {
         process: RecordingProcessRunner::success(
             0,
             br#"{"hook_bridge":{"kind":"additional_context","text":"read docs"}}"#,
-            b"",
+            b"warn",
         ),
         io: CapturingIo::default(),
         tmp: temp.path().to_path_buf(),
@@ -1008,6 +1008,15 @@ fn run_user_command_parses_structured_bridge_output() {
         result.as_ref().map(|value| value.status),
         Ok(InternalStatus::Success)
     );
+    assert_eq!(
+        result.as_ref().map(|value| value.raw_stdout.clone()),
+        Ok(br#"{"hook_bridge":{"kind":"additional_context","text":"read docs"}}"#.to_vec())
+    );
+    assert_eq!(
+        result.as_ref().map(|value| value.raw_stderr.clone()),
+        Ok(b"warn".to_vec())
+    );
+    assert_eq!(result.as_ref().map(|value| value.exit_code), Ok(Some(0)));
 }
 
 #[test]
@@ -1182,7 +1191,11 @@ fn run_user_command_promotes_plaintext_stdout_to_codex_additional_context() {
     let runtime = RecordingRuntime {
         fs: OsFileSystem,
         clock: FixedClock::new(std::time::UNIX_EPOCH),
-        process: RecordingProcessRunner::success(0, b"Load workspace conventions.\n", b""),
+        process: RecordingProcessRunner::success(
+            0,
+            b"Load workspace conventions.\n",
+            b"native stderr",
+        ),
         io: CapturingIo::default(),
         tmp: temp.path().to_path_buf(),
     };
@@ -1213,6 +1226,15 @@ fn run_user_command_promotes_plaintext_stdout_to_codex_additional_context() {
             text: "Load workspace conventions.".to_string()
         }))
     );
+    assert_eq!(
+        result.as_ref().map(|value| value.raw_stdout.clone()),
+        Ok(b"Load workspace conventions.\n".to_vec())
+    );
+    assert_eq!(
+        result.as_ref().map(|value| value.raw_stderr.clone()),
+        Ok(b"native stderr".to_vec())
+    );
+    assert_eq!(result.as_ref().map(|value| value.exit_code), Ok(Some(0)));
 }
 
 #[test]

@@ -132,6 +132,33 @@ mod tests {
     }
 
     #[test]
+    fn normalize_event_name_accepts_extended_claude_events() {
+        for event in [
+            "PermissionRequest",
+            "PermissionDenied",
+            "PostToolUseFailure",
+            "TaskCreated",
+            "StopFailure",
+            "TeammateIdle",
+            "InstructionsLoaded",
+            "ConfigChange",
+            "CwdChanged",
+            "FileChanged",
+            "WorktreeRemove",
+            "PreCompact",
+            "PostCompact",
+            "ElicitationResult",
+            "SessionEnd",
+        ] {
+            assert_eq!(
+                normalize_event_name(Platform::Claude, event),
+                Some(event),
+                "event '{event}' should remain available for Claude"
+            );
+        }
+    }
+
+    #[test]
     fn platform_output_preserves_stdout_and_exit_code() {
         assert_eq!(
             PlatformOutput {

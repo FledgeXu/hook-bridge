@@ -142,7 +142,7 @@ mod tests {
     use crate::runtime::io::{FakeIo, Io};
     use crate::runtime::process::{FakeProcessRunner, ProcessRunner};
 
-    use super::{OutputStream, ProgramOutcome, result_to_exit_code};
+    use super::{OutputStream, ProgramOutcome, result_to_exit_code, run_cli};
 
     struct TestRuntime {
         fs: FakeFileSystem,
@@ -335,5 +335,40 @@ mod tests {
 
         assert_eq!(outcome.exit_code, ExitCode::from(3));
         assert_eq!(outcome.stream, Some(OutputStream::Stderr));
+    }
+
+    #[test]
+    fn run_cli_surfaces_run_command_errors() {
+        let lock_result = crate::CWD_LOCK.lock();
+        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
+        let Ok(_lock) = lock_result else {
+            return;
+        };
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let original_result = std::env::current_dir();
+        assert!(original_result.is_ok(), "cwd lookup should succeed");
+        let Ok(original) = original_result else {
+            return;
+        };
+        let switch_result = std::env::set_current_dir(temp.path());
+        assert!(switch_result.is_ok(), "cwd switch should succeed");
+        let Ok(()) = switch_result else {
+            return;
+        };
+
+        let result = run_cli(crate::cli::Cli {
+            command: crate::cli::Command::Run(crate::cli::RunArgs {
+                platform: crate::platform::Platform::Codex,
+                rule_id: "r1".to_string(),
+            }),
+        });
+
+        let restore_result = std::env::set_current_dir(&original);
+        assert!(restore_result.is_ok(), "cwd restore should succeed");
+        assert!(matches!(result, Err(HookBridgeError::Io { .. })));
     }
 }

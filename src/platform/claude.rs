@@ -754,6 +754,36 @@ mod tests {
     }
 
     #[test]
+    fn translates_elicitation_response_output_for_elicitation_result() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::ElicitationResponse {
+                action: "accept".to_string(),
+                content: Some(serde_json::json!({ "answer": "yes" })),
+            }),
+        };
+
+        let translated = translate_output(&context("ElicitationResult"), &result);
+        assert!(translated.is_ok());
+        let output = translated.unwrap_or_else(|_| unreachable!());
+        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+        assert_eq!(
+            parsed,
+            Some(serde_json::json!({
+                "hookSpecificOutput": {
+                    "action": "accept",
+                    "content": { "answer": "yes" }
+                }
+            }))
+        );
+    }
+
+    #[test]
     fn translates_elicitation_response_output() {
         let result = ExecutionResult {
             status: InternalStatus::Success,
@@ -781,6 +811,152 @@ mod tests {
                 }
             }))
         );
+    }
+
+    #[test]
+    fn rejects_additional_context_for_unsupported_event() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::AdditionalContext {
+                text: "ignored".to_string(),
+            }),
+        };
+
+        assert!(matches!(
+            translate_output(&context("CwdChanged"), &result),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_permission_decision_for_unsupported_event() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::PermissionDecision {
+                behavior: "allow".to_string(),
+                reason: Some("ok".to_string()),
+                updated_input: None,
+                additional_context: None,
+            }),
+        };
+
+        assert!(matches!(
+            translate_output(&context("Notification"), &result),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_permission_retry_for_unsupported_event() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::PermissionRetry { reason: None }),
+        };
+
+        assert!(matches!(
+            translate_output(&context("PermissionRequest"), &result),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_elicitation_response_for_unsupported_event() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: Some(BridgeOutput::ElicitationResponse {
+                action: "accept".to_string(),
+                content: None,
+            }),
+        };
+
+        assert!(matches!(
+            translate_output(&context("Notification"), &result),
+            Err(crate::error::HookBridgeError::PlatformProtocol { .. })
+        ));
+    }
+
+    #[test]
+    fn exit_code_two_permission_request_prefers_explicit_bridge_output() {
+        let result = ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(2),
+            raw_stdout: Vec::new(),
+            raw_stderr: b"should not override\n".to_vec(),
+            bridge_output: Some(BridgeOutput::PermissionDecision {
+                behavior: "allow".to_string(),
+                reason: Some("rewritten".to_string()),
+                updated_input: None,
+                additional_context: None,
+            }),
+        };
+
+        let translated = translate_output(&context("PermissionRequest"), &result);
+        assert!(translated.is_ok());
+        let output = translated.unwrap_or_else(|_| unreachable!());
+        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+        assert_eq!(
+            parsed,
+            Some(serde_json::json!({
+                "hookSpecificOutput": {
+                    "decision": {
+                        "behavior": "allow"
+                    },
+                    "reason": "rewritten"
+                }
+            }))
+        );
+    }
+
+    #[test]
+    fn teammate_feedback_does_not_override_bridge_output() {
+        let result = ExecutionResult {
+            status: InternalStatus::Stop,
+            message: None,
+            system_message: None,
+            exit_code: Some(2),
+            raw_stdout: Vec::new(),
+            raw_stderr: b"feedback\n".to_vec(),
+            bridge_output: Some(BridgeOutput::Stop {
+                reason: Some("halt teammate".to_string()),
+                system_message: None,
+            }),
+        };
+
+        let translated = translate_output(&context("TaskCompleted"), &result);
+        assert!(translated.is_ok());
+        let output = translated.unwrap_or_else(|_| unreachable!());
+        let parsed = serde_json::from_slice::<serde_json::Value>(&output.stdout).ok();
+        assert_eq!(
+            parsed,
+            Some(serde_json::json!({
+                "continue": false,
+                "stopReason": "halt teammate"
+            }))
+        );
+        assert_eq!(output.stderr, Vec::<u8>::new());
+        assert_eq!(output.exit_code, 0);
     }
 
     #[test]

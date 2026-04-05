@@ -343,6 +343,55 @@ mod tests {
     }
 
     #[test]
+    fn system_runner_returns_negative_one_for_signaled_exit() {
+        let runner = SystemProcessRunner;
+        let request = ProcessRequest {
+            program: "sh".to_string(),
+            args: vec!["-lc".to_string(), "kill -9 $$".to_string()],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(1),
+            cwd: None,
+            env: BTreeMap::new(),
+        };
+
+        assert!(matches!(
+            runner.run(&request),
+            Ok(super::ProcessOutput {
+                status_code: -1,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn system_runner_timeout_cleans_up_child_before_it_can_write_later_output() {
+        let temp_result = tempfile::tempdir();
+        assert!(temp_result.is_ok(), "tempdir creation should succeed");
+        let Ok(temp) = temp_result else {
+            return;
+        };
+        let marker = temp.path().join("late.txt");
+        let script = format!("sleep 2; printf late > '{}'", marker.to_string_lossy());
+        let runner = SystemProcessRunner;
+        let request = ProcessRequest {
+            program: "sh".to_string(),
+            args: vec!["-lc".to_string(), script],
+            stdin: Vec::new(),
+            timeout: Duration::from_secs(1),
+            cwd: None,
+            env: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            runner.run(&request),
+            Err(HookBridgeError::Timeout { timeout_sec: 1 })
+        );
+
+        std::thread::sleep(Duration::from_millis(1500));
+        assert!(!marker.exists(), "timed out child should be terminated");
+    }
+
+    #[test]
     fn collect_pipe_reader_returns_empty_for_missing_handle() {
         assert_eq!(collect_pipe_reader(None, "stdout"), Ok(Vec::new()));
     }

@@ -324,15 +324,6 @@ fn codex_plaintext_success_result(
                 text: text.to_string(),
             },
         )),
-        "Stop" => Some(ExecutionResult {
-            status: InternalStatus::Success,
-            message: None,
-            system_message: None,
-            exit_code: Some(0),
-            raw_stdout: Vec::new(),
-            raw_stderr: Vec::new(),
-            bridge_output: None,
-        }),
         _ => None,
     }
 }

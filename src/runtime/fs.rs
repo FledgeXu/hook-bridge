@@ -311,6 +311,7 @@ mod tests {
         let fs = FakeFileSystem::default();
         let path = PathBuf::from("/tmp/mock");
 
+        assert_eq!(fs.read_to_string(&path), Ok(String::new()));
         assert_eq!(fs.write_all(&path, b"ok"), Ok(()));
         assert_eq!(fs.create_dir_all(&path), Ok(()));
         assert_eq!(fs.rename(&path, &path), Ok(()));
