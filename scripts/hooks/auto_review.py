@@ -1,23 +1,18 @@
 #!/usr/bin/env python3
-from contextlib import suppress
-import hashlib
 import json
 import os
 import stat
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 
 ENABLE_ENV = "CODEX_AUTO_REVIEW"
-MAX_ROUNDS_ENV = "CODEX_AUTO_REVIEW_MAX_ROUNDS"
 CHILD_ENV = "CODEX_AUTO_REVIEW_CHILD"
 INCLUDE_UNTRACKED_CONTENT_ENV = "CODEX_AUTO_REVIEW_INCLUDE_UNTRACKED_CONTENT"
 MAX_REVIEW_INPUT_CHARS = 120000
 
 HOOK_DIR = Path(__file__).resolve().parent
-SCHEMA_PATH = HOOK_DIR / "review_schema.json"
 PROMPT_PATH = HOOK_DIR / "review_prompt.md"
 DEFAULT_CODE_PATTERNS = (
     ".py,.pyi,.ipynb,.js,.jsx,.mjs,.cjs,.ts,.tsx,.vue,.svelte,.go,.rs,.java,"
@@ -37,16 +32,7 @@ DEFAULT_UNTRACKED_CONTENT_PATTERNS = (
 )
 IGNORED_FILES = {"package-lock.json"}
 REVIEW_TRIGGER_FILES = {"scripts/hooks/review_prompt.md"}
-PROMPT_RULES = """
-# 输出要求
-
-- 必须严格符合给定 JSON Schema。
-- `summary`、`title`、`explanation`、`fix_hint` 全部使用中文。
-- `findings` 保持简洁、可执行、可定位。
-- 你必须输出 `verdict`，且只能是 `pass` 或 `block`。
-- `verdict=pass` 时，`findings` 必须为空。
-- `verdict=block` 时，`findings` 必须至少包含一个可确认的问题。
-""".strip()
+PASS_MARKER = "PASS"
 
 
 def pattern_sets(patterns: str) -> tuple[set[str], set[str]]:
@@ -62,44 +48,20 @@ CODE_PATTERNS = pattern_sets(DEFAULT_CODE_PATTERNS)
 UNTRACKED_CONTENT_PATTERNS = pattern_sets(DEFAULT_UNTRACKED_CONTENT_PATTERNS)
 
 
-def state_path(cwd: str) -> Path:
-    key = hashlib.sha256(str(Path(cwd).resolve()).encode("utf-8")).hexdigest()[:16]
-    return Path(tempfile.gettempdir()) / "codex-auto-review" / f"{key}.json"
-
-
-def emit(payload: dict) -> int:
-    print(json.dumps(payload, ensure_ascii=False))
+def allow() -> int:
     return 0
 
 
-def allow() -> int:
-    return emit({"continue": True})
-
-
-def block(reason: str) -> int:
-    return emit({"decision": "block", "reason": reason})
-
-
-def stop(message: str) -> int:
-    return emit(
-        {
-            "continue": False,
-            "stopReason": "automated review blocked stop",
-            "systemMessage": message,
-        }
-    )
+def fail(message: str) -> int:
+    text = message.strip()
+    if text:
+        print(text)
+    return 1
 
 
 def env_enabled(name: str, default: bool = True) -> bool:
     value = os.environ.get(name)
     return default if value is None else value.strip().lower() not in {"", "0", "false", "no", "off"}
-
-
-def env_int(name: str, default: int) -> int:
-    try:
-        return int(os.environ.get(name, default))
-    except ValueError:
-        return default
 
 
 def auto_review_enabled() -> bool:
@@ -112,10 +74,6 @@ def is_child_process() -> bool:
 
 def include_untracked_content() -> bool:
     return env_enabled(INCLUDE_UNTRACKED_CONTENT_ENV, default=False)
-
-
-def max_review_rounds() -> int:
-    return max(1, env_int(MAX_ROUNDS_ENV, 3))
 
 
 def run(
@@ -135,44 +93,6 @@ def run(
         capture_output=True,
         env=env,
     )
-
-
-def read_state(cwd: str) -> dict[str, int]:
-    try:
-        data = json.loads(state_path(cwd).read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    if not isinstance(data, dict):
-        return {}
-    return {
-        str(key): value
-        for key, value in data.items()
-        if isinstance(value, int) and value >= 0
-    }
-
-
-def write_state(cwd: str, state: dict[str, int]) -> None:
-    path = state_path(cwd)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def clear_turn(cwd: str, turn_id: str) -> None:
-    state = read_state(cwd)
-    if turn_id not in state:
-        return
-    del state[turn_id]
-    if state:
-        write_state(cwd, state)
-    else:
-        with suppress(Exception):
-            state_path(cwd).unlink(missing_ok=True)
-
-
-def set_turn_round(cwd: str, turn_id: str, round_count: int) -> None:
-    state = read_state(cwd)
-    state[turn_id] = round_count
-    write_state(cwd, state)
 
 
 def git_paths(cwd: str, args: list[str], error_message: str) -> list[str]:
@@ -435,110 +355,63 @@ def run_review(
         "</last_assistant_message>\n\n"
     )
     return run(
-        ["codex", "exec", "--disable", "codex_hooks", "--output-schema", str(SCHEMA_PATH), "-"],
+        ["codex", "exec", "--disable", "codex_hooks", "-"],
         cwd,
-        input_text=f"{PROMPT_PATH.read_text(encoding='utf-8').strip()}\n\n{PROMPT_RULES}\n\n{context}<changes>\n{review_input}\n</changes>\n",
+        input_text=f"{PROMPT_PATH.read_text(encoding='utf-8').strip()}\n\n{context}<changes>\n{review_input}\n</changes>\n",
         extra_env={CHILD_ENV: "1"},
     )
 
 
-def format_review(review: dict) -> str:
-    lines = ["## 结论", "", f"`{review.get('verdict', 'unknown')}`"]
-    if review.get("summary"):
-        lines += ["", "## 总结", "", str(review["summary"])]
-    findings = review.get("findings") or []
-    if findings:
-        lines.append("")
-        lines.append("## 问题")
-    for index, item in enumerate(findings, start=1):
-        if not isinstance(item, dict):
-            continue
-        lines += [
-            "",
-            f"{index}. `[{item.get('severity', 'unknown')}]` `{item.get('file', '<unknown>')}`: {item.get('title', 'Untitled finding')}",
-        ]
-        if item.get("explanation"):
-            lines += ["", f"说明：{item['explanation']}"]
-        if item.get("fix_hint"):
-            lines += ["", f"修复建议：{item['fix_hint']}"]
-    return "\n".join(lines).strip() or json.dumps(review, ensure_ascii=False, indent=2)
+def normalize_review_output(text: str) -> str:
+    return text.strip()
 
 
-def finalize_review(cwd: str, turn_id: str, review: dict) -> int:
-    if review["verdict"] == "pass":
-        clear_turn(cwd, turn_id)
+def finalize_review(review_output: str) -> int:
+    if review_output == PASS_MARKER:
         return allow()
-
-    current_round = read_state(cwd).get(turn_id, 0)
-    message = format_review(review)[:12000]
-    if current_round >= max_review_rounds():
-        clear_turn(cwd, turn_id)
-        return allow()
-
-    next_round = current_round + 1
-    set_turn_round(cwd, turn_id, next_round)
-    return block(
-        "# 自动审查发现问题\n\n"
-        "请先修复下面的问题，再继续当前任务。\n\n"
-        f"- 重试轮次：`{next_round}/{max_review_rounds()}`\n"
-        f"\n{message}"
-    )
+    if not review_output:
+        return fail("自动审查返回空输出，无法判断是否通过。")
+    return fail(review_output[:12000])
 
 
 def review_result(
     cwd: str,
-    turn_id: str,
     review_input: str,
     last_assistant_message: str,
 ) -> int:
     try:
         review_proc = run_review(cwd, review_input, last_assistant_message)
     except Exception as exc:
-        clear_turn(cwd, turn_id)
-        return stop(f"自动审查配置错误：读取 review 模版失败。\n\n{exc}")
+        return fail(f"自动审查配置错误：读取 review 模版失败。\n\n{exc}")
     if review_proc.returncode != 0:
-        clear_turn(cwd, turn_id)
-        return stop(
+        return fail(
             "自动审查进程执行失败。\n\n"
             f"stdout:\n{review_proc.stdout[:4000]}\n\n"
             f"stderr:\n{review_proc.stderr[:4000]}"
         )
-    try:
-        review = json.loads((review_proc.stdout or "").strip())
-    except json.JSONDecodeError as exc:
-        clear_turn(cwd, turn_id)
-        return stop(
-            "自动审查返回了无效 JSON。\n\n"
-            f"解析错误: {exc}\n\n"
-            f"原始输出:\n{(review_proc.stdout or '')[:6000]}"
-        )
-    return finalize_review(cwd, turn_id, review)
+    return finalize_review(normalize_review_output(review_proc.stdout or ""))
 
 
-def parse_payload() -> tuple[str, str, str]:
+def parse_payload() -> tuple[str, str]:
     payload = json.load(sys.stdin)
-    return payload["cwd"], str(payload.get("turn_id") or "unknown-turn"), str(payload.get("last_assistant_message") or "")
+    return payload["cwd"], str(payload.get("last_assistant_message") or "")
 
 
 def main() -> int:
-    cwd, turn_id, last_assistant_message = parse_payload()
+    cwd, last_assistant_message = parse_payload()
     if not auto_review_enabled() or is_child_process():
-        clear_turn(cwd, turn_id)
         return allow()
 
     try:
         review_input = "" if not has_reviewable_changes(cwd) else collect_changes(cwd)
     except Exception as exc:
-        clear_turn(cwd, turn_id)
-        return stop(f"自动审查在收集改动时失败。\n\n{exc}")
+        return fail(f"自动审查在收集改动时失败。\n\n{exc}")
 
     if not review_input:
-        clear_turn(cwd, turn_id)
         return allow()
-    if not SCHEMA_PATH.is_file():
-        clear_turn(cwd, turn_id)
-        return stop(f"自动审查配置错误：缺少 schema 文件 {SCHEMA_PATH}")
-    return review_result(cwd, turn_id, review_input, last_assistant_message)
+    if not PROMPT_PATH.is_file():
+        return fail(f"自动审查配置错误：缺少 prompt 文件 {PROMPT_PATH}")
+    return review_result(cwd, review_input, last_assistant_message)
 
 
 if __name__ == "__main__":

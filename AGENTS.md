@@ -16,6 +16,8 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 ### File Index
 - `AGENTS.md`
 - `hook-bridge.yaml`
+- `scripts/hooks/auto_review.py`
+- `scripts/hooks/review_prompt.md`
 - `src/main.rs`
 - `src/platform/codex.rs`
 - `src/platform/claude.rs`
