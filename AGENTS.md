@@ -19,7 +19,7 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - `Makefile`: Developer convenience targets for common local workflows such as build, test, lint, and review checks.
 - `examples/basic.yaml`: Basic shared hooks for session start plus pre/post tool logging.
 - `examples/claude-extended-events.yaml`: Claude-only native event examples for permission decisions, elicitation replies, notifications, subagent stop control, and teammate-idle feedback.
-- `scripts/check_file_lines.sh`: Repository guard that fails when Rust source or test files exceed the configured line-count limit.
+- `scripts/check_file_lines.sh`: Repository guard that safely scans Rust source and test files, including paths with whitespace, and fails when files exceed the configured line-count limit.
 - `scripts/hooks/auto_review.py`: Git-aware review hook that gathers changed-file context, invokes Codex for automatic review, and enforces concise failure output.
 - `scripts/hooks/review_prompt.md`: Review prompt template consumed by the automated review hook.
 - `src/app.rs`: Application command dispatch, runtime abstraction wiring, and app-level routing tests.
