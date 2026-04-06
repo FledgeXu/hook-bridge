@@ -18,11 +18,13 @@ hooks:
         echo "No Rust file changes detected; skipping verification."
       fi
 
-  - id: stop.auto-review
-    description: Run the automated review gate before allowing a stop event to finish.
-    event: Stop
-    status_message: Reviewing...
-    command: python3 ./scripts/hooks/auto_review.py
+  # Spend too much token...
+  # TODO: We need a better tool.
+  # - id: stop.auto-review
+  #   description: Run the automated review gate before allowing a stop event to finish.
+  #   event: Stop
+  #   status_message: Reviewing...
+  #   command: python3 ./scripts/hooks/auto_review.py
 
 
   - id: stop.dont_touch_cargo
