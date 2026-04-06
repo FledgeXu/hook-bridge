@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Update the AGENTS.md index after every task is completed.
+Update the AGENTS.md index only when needed.
 
 ## Fundamental Principle
 For any updates to AGENTS.md, only the sections under Maintain by Robot should be updated; all other parts must not be modified.

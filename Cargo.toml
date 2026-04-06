@@ -10,11 +10,12 @@ categories = ["command-line-utilities", "development-tools"]
 repository = "https://github.com/FledgeXu/hook-bridge"
 
 [dependencies]
-anyhow = "1.0.102"
+atomic-write-file = "0.3.0"
 clap = { version = "4.6.0", features = ["derive"] }
 dialoguer = "0.12.0"
 fs-err = "3.3.0"
 hex = "0.4.3"
+process-wrap = "9.1.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_yaml = "0.9.34"
