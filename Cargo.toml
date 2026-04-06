@@ -7,6 +7,7 @@ license = "UNLICENSED"
 readme = "README.md"
 keywords = ["hooks", "bridge", "cli"]
 categories = ["command-line-utilities", "development-tools"]
+repository = "https://github.com/FledgeXu/hook-bridge"
 
 [dependencies]
 anyhow = "1.0.102"
@@ -21,14 +22,13 @@ thiserror = "2.0.18"
 wait-timeout = "0.2.1"
 
 [lints.clippy]
-cargo_common_metadata = "allow"
-correctness = { level = "deny", priority = -1 }
-suspicious = { level = "deny", priority = -1 }
-complexity = { level = "deny", priority = -1 }
-perf = { level = "deny", priority = -1 }
-style = { level = "deny", priority = -1 }
-pedantic = { level = "deny", priority = -1 }
-cargo = { level = "deny", priority = -1 }
+correctness = "deny"
+suspicious = "deny"
+complexity = "deny"
+perf = "deny"
+style = "deny"
+pedantic = "deny"
+cargo = "deny"
 
 # restriction
 dbg_macro = "deny"
