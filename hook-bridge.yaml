@@ -23,3 +23,11 @@ hooks:
     event: Stop
     status_message: Reviewing...
     command: python3 ./scripts/hooks/auto_review.py
+
+
+  - id: stop.dont_touch_cargo
+    description: Don't touch cargo.
+    event: Stop
+    status_message: Verifying Cargo.toml...
+    command: |
+      ./scripts/dont_touch_cargo.sh
