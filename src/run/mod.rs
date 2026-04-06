@@ -7,7 +7,6 @@ use crate::cli::RunArgs;
 use crate::config::{PlatformRule, parse_and_normalize};
 use crate::error::HookBridgeError;
 use crate::generate;
-use crate::platform::capability::{self, DecisionKind};
 use crate::platform::{self, Platform};
 use crate::runtime::Runtime;
 use crate::runtime::process::ProcessRequest;
@@ -128,12 +127,8 @@ fn execute_rule(
     let state_path = retry_state_path(runtime, context);
     let state = load_retry_state(runtime, &state_path)?;
     if retry_guard_engaged(rule, &state) {
-        let mut result = retry_guard_result();
-        if !capability::allowed_decisions(context.platform, &context.event)
-            .contains(&DecisionKind::Stop)
-        {
-            result.status = InternalStatus::Block;
-        }
+        let result = retry_guard_result(rule, context);
+        update_retry_state(runtime, &state_path, &state, &result, true)?;
         return Ok(result);
     }
 
@@ -153,11 +148,12 @@ fn execute_rule(
                 raw_stderr: execution_result.raw_stderr.clone(),
                 bridge_output: None,
             },
+            false,
         )?;
         return Err(error);
     }
 
-    update_retry_state(runtime, &state_path, &state, &execution_result)?;
+    update_retry_state(runtime, &state_path, &state, &execution_result, false)?;
 
     Ok(execution_result)
 }

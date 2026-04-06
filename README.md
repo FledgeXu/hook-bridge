@@ -105,6 +105,7 @@ defaults:
   shell: sh
   timeout_sec: 30
   max_retries: 0
+  on_max_retries: stop
   working_dir: /absolute/path
 
 hooks:
@@ -116,6 +117,7 @@ hooks:
     shell: sh
     timeout_sec: 30
     max_retries: 0
+    on_max_retries: stop
     working_dir: /absolute/path
     env:
       KEY: value
@@ -158,6 +160,8 @@ Normalization rules:
 - `shell`: command runner, executed as `<shell> -lc '<command>'`
 - `timeout_sec`: command timeout in seconds
 - `max_retries`: retry allowance for repeated failures
+- `on_max_retries`: post-threshold retry policy: `stop`, `block`, or `allow_and_reset`
+  When `max_retries > 0`, the selected policy must be representable by that platform event.
 - `working_dir`: absolute directory override; if omitted, hook payload cwd is used when present
 - `matcher`: only valid for events that support matching on that platform
 - `status_message`: optional generated-hook status text
@@ -285,8 +289,13 @@ If your command exits non-zero and does not emit a valid structured result, `hoo
 ## Retry Behavior
 
 - `max_retries` defaults to `0`.
+- `on_max_retries` defaults to `stop`.
 - Retry state is tracked per runtime context.
 - Repeated failures can trigger a retry guard before the command is executed again.
+- `stop` preserves current behavior: short-circuit execution and emit a stop result, degrading to block on events that cannot stop.
+- `block` short-circuits execution and always emits a block result, so it is only valid on events whose platform protocol supports block decisions.
+- `allow_and_reset` short-circuits execution, returns normal success output, and clears retry state immediately.
+- Events that support neither `stop` nor `block` cannot use retry guards; configs with `max_retries > 0` for those events are rejected during normalization.
 - Structured `stop` results are not treated as failures for retry-state purposes.
 
 ## Managed File Safety

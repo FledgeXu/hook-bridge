@@ -5,6 +5,7 @@ defaults:
   shell: sh
   timeout_sec: 20
   max_retries: 2
+  on_max_retries: stop
 
 hooks:
   - id: audit.payload.capture
@@ -35,12 +36,13 @@ hooks:
           AUDIT_TAG: codex
 
   - id: retry.flaky.post_tool
-    description: Demonstrate a per-rule retry override for a flaky post-tool check.
+    description: Demonstrate per-rule retry count and post-threshold policy overrides for a flaky post-tool check.
     event: after_command
     matcher: ".*"
     command: |
       test -f .hook_bridge/retry-ready
     max_retries: 1
+    on_max_retries: allow_and_reset
 
   - id: custom.cwd.override
     description: Run a hook from a fixed absolute directory instead of the incoming payload cwd.

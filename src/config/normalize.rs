@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use crate::error::HookBridgeError;
 use crate::platform::Platform;
-use crate::platform::capability;
+use crate::platform::capability::{self, DecisionKind};
 
 use super::schema::{RawConfig, RawDefaults, RawHookRule};
 
@@ -30,9 +30,28 @@ pub struct PlatformRule {
     pub shell: String,
     pub timeout_sec: u64,
     pub max_retries: u32,
+    pub on_max_retries: OnMaxRetriesPolicy,
     pub working_dir: Option<PathBuf>,
     pub env: BTreeMap<String, String>,
     pub extra: BTreeMap<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OnMaxRetriesPolicy {
+    Stop,
+    Block,
+    AllowAndReset,
+}
+
+impl OnMaxRetriesPolicy {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Block => "block",
+            Self::AllowAndReset => "allow_and_reset",
+        }
+    }
 }
 
 impl NormalizedConfig {
@@ -248,6 +267,13 @@ fn build_platform_rule(
         .or(raw_rule.max_retries)
         .or(defaults.max_retries)
         .unwrap_or(0);
+    let on_max_retries = resolve_on_max_retries(
+        platform,
+        &event,
+        defaults,
+        raw_rule,
+        override_block.as_ref(),
+    )?;
 
     let working_dir = override_block
         .as_ref()
@@ -285,10 +311,95 @@ fn build_platform_rule(
         shell,
         timeout_sec,
         max_retries,
+        on_max_retries,
         working_dir,
         env,
         extra,
     }))
+}
+
+fn parse_on_max_retries(
+    rule_id: &str,
+    value: Option<&str>,
+) -> Result<OnMaxRetriesPolicy, HookBridgeError> {
+    match value.unwrap_or("stop") {
+        "stop" => Ok(OnMaxRetriesPolicy::Stop),
+        "block" => Ok(OnMaxRetriesPolicy::Block),
+        "allow_and_reset" => Ok(OnMaxRetriesPolicy::AllowAndReset),
+        other => Err(HookBridgeError::ConfigValidation {
+            message: format!(
+                "rule '{rule_id}' field 'on_max_retries' must be one of [stop, block, allow_and_reset], got '{other}'"
+            ),
+        }),
+    }
+}
+
+fn resolve_on_max_retries(
+    platform: Platform,
+    event: &str,
+    defaults: &RawDefaults,
+    raw_rule: &RawHookRule,
+    override_block: Option<&super::schema::RawPlatformOverride>,
+) -> Result<OnMaxRetriesPolicy, HookBridgeError> {
+    let max_retries = override_block
+        .and_then(|block| block.max_retries)
+        .or(raw_rule.max_retries)
+        .or(defaults.max_retries)
+        .unwrap_or(0);
+    let policy = parse_on_max_retries(
+        raw_rule.id.as_str(),
+        override_block
+            .and_then(|block| block.on_max_retries.as_deref())
+            .or(raw_rule.on_max_retries.as_deref())
+            .or(defaults.on_max_retries.as_deref()),
+    )?;
+    validate_on_max_retries(platform, event, raw_rule.id.as_str(), max_retries, policy)?;
+    Ok(policy)
+}
+
+fn validate_on_max_retries(
+    platform: Platform,
+    event: &str,
+    rule_id: &str,
+    max_retries: u32,
+    policy: OnMaxRetriesPolicy,
+) -> Result<(), HookBridgeError> {
+    if max_retries == 0 {
+        return Ok(());
+    }
+
+    let allowed_decisions = capability::allowed_decisions(platform, event);
+    let supports_guard = allowed_decisions.contains(&DecisionKind::Stop)
+        || allowed_decisions.contains(&DecisionKind::Block);
+    if !supports_guard {
+        return Err(HookBridgeError::ConfigValidation {
+            message: format!(
+                "rule '{rule_id}' field 'on_max_retries' value '{}' is not supported for event '{event}' on platform '{}'",
+                policy.as_str(),
+                platform.as_str()
+            ),
+        });
+    }
+
+    let supported = match policy {
+        OnMaxRetriesPolicy::Stop => {
+            allowed_decisions.contains(&DecisionKind::Stop)
+                || allowed_decisions.contains(&DecisionKind::Block)
+        }
+        OnMaxRetriesPolicy::Block => allowed_decisions.contains(&DecisionKind::Block),
+        OnMaxRetriesPolicy::AllowAndReset => true,
+    };
+
+    if !supported {
+        return Err(HookBridgeError::ConfigValidation {
+            message: format!(
+                "rule '{rule_id}' field 'on_max_retries' value '{}' is not supported for event '{event}' on platform '{}'",
+                policy.as_str(),
+                platform.as_str()
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn normalize_platform_event(

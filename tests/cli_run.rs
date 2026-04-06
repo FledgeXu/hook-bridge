@@ -38,6 +38,9 @@ mod basic;
 #[path = "cli_run/retry_state.rs"]
 mod retry_state;
 
+#[path = "cli_run/retry_policy.rs"]
+mod retry_policy;
+
 #[path = "cli_run/platform_outputs.rs"]
 mod platform_outputs;
 
