@@ -410,9 +410,10 @@ fn invalid_structured_output_creates_retry_state_after_protocol_failure() {
 version: 1
 defaults:
   max_retries: 2
+  on_max_retries: block
 hooks:
   - id: bad_structured
-    event: Notification
+    event: UserPromptSubmit
     command: |
       cat <<'EOF'
       {"hook_bridge":{"kind":"stop","reason":"later"}}
@@ -441,7 +442,7 @@ hooks:
         .success();
 
     let payload =
-        r#"{"hook_event_name":"Notification","session_id":"bad_structured_session","cwd":"."}"#;
+        r#"{"hook_event_name":"UserPromptSubmit","session_id":"bad_structured_session","cwd":"."}"#;
     let state_path = retry_state_path(
         "claude",
         &config_path,

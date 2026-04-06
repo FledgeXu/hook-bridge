@@ -14,7 +14,7 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 ## Maintain by Robot
 
 ### File Index And Description
-- `README.md`: End-to-end user guide covering install, generate/run flow, schema, events, structured outputs, retry behavior, managed file safety, and example usage.
+- `README.md`: End-to-end user guide covering install, generate/run flow, schema, events, structured outputs, `on_max_retries` policy behavior, managed file safety, and example usage.
 - `hook-bridge.yaml`: Local hook configuration that runs the stop-event verification and automated review gates for this repository.
 - `Makefile`: Developer convenience targets for common local workflows such as build, test, lint, and review checks.
 - `examples/basic.yaml`: Basic shared hooks for session start plus pre/post tool logging.
@@ -24,10 +24,10 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - `scripts/hooks/review_prompt.md`: Review prompt template consumed by the automated review hook.
 - `src/app.rs`: Application command dispatch, runtime abstraction wiring, and app-level routing tests.
 - `src/cli.rs`: CLI argument definitions, including the default `hook-bridge.yaml` config path and optional single-platform filter for `generate`.
-- `src/config/mod.rs`: Config module wiring that re-exports normalized config types and enables config-focused tests.
-- `src/config/schema.rs`: YAML schema definitions for top-level defaults, hooks, and platform overrides.
-- `src/config/normalize.rs`: Config validation and normalization into platform-specific runtime rules.
-- `src/config/tests.rs`: Validation and normalization tests for config parsing rules.
+- `src/config/mod.rs`: Config module wiring that re-exports normalized config types, including retry-threshold policy enums, and enables config-focused tests.
+- `src/config/schema.rs`: YAML schema definitions for top-level defaults, hooks, and platform overrides, including shared `on_max_retries` fields.
+- `src/config/normalize.rs`: Config validation and normalization into platform-specific runtime rules, including validated `on_max_retries` policy inheritance and event-capability checks for `stop`/`block` when retries are enabled.
+- `src/config/tests.rs`: Validation and normalization tests for config parsing rules, including `on_max_retries` inheritance, defaults, invalid-value rejection, and unsupported-event retry-guard validation.
 - `src/error.rs`: Domain error types and stable process exit-code mapping for CLI and runtime failures.
 - `src/generate/build.rs`: Converts normalized hooks into Claude/Codex managed hook handler JSON.
 - `src/generate/managed.rs`: Managed-file metadata helpers, target-path mapping, runtime-cwd-aware path resolution, and conflict preflight checks for generated hook outputs.
@@ -43,12 +43,12 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - `src/platform/codex.rs`: Codex payload parsing and translation of bridge/runtime results into Codex hook JSON output.
 - `src/platform/mod.rs`: Shared platform types, event normalization, and dispatch to platform-specific output translators.
 - `src/run/context.rs`: Runtime payload parsing into normalized execution context fields shared across platforms.
-- `src/run/mod.rs`: Runtime hook execution, including non-zero exit handling and formatted failure summaries.
-- `src/run/retry.rs`: Retry-state storage, retry-guard decisions, and failure persistence keyed by config path, session, and rule.
+- `src/run/mod.rs`: Runtime hook execution, including policy-driven retry guards, non-zero exit handling, and formatted failure summaries.
+- `src/run/retry.rs`: Retry-state storage, policy-driven retry-guard decisions, and failure persistence/reset keyed by config path, session, and rule.
 - `src/run/tests.rs`: Shared fixtures and submodule wiring for runtime unit tests.
 - `src/run/tests/command_output.rs`: Runtime tests for process execution inputs, output summaries, and bridge-output parsing.
 - `src/run/tests/context_execute.rs`: Runtime tests for context parsing, execute-path validation, and shared helper behavior.
-- `src/run/tests/retry_state.rs`: Runtime tests for retry-state persistence, guard behavior, and execute-rule retry updates.
+- `src/run/tests/retry_state.rs`: Runtime tests for retry-state persistence, `stop`/`block`/`allow_and_reset` guard behavior, and execute-rule retry updates.
 - `src/runtime/clock.rs`: Clock abstraction with system and fixed implementations for deterministic retry-state tests.
 - `src/runtime/fs.rs`: Filesystem abstraction implementations, current-directory lookup, atomic-write helpers, and filesystem-focused tests.
 - `src/runtime/io.rs`: Stdio abstraction and helpers for reading stdin plus writing stdout/stderr with test doubles.
@@ -62,8 +62,9 @@ For any updates to AGENTS.md, only the sections under Maintain by Robot should b
 - `tests/cli_run.rs`: Shared helpers and submodule wiring for `run` integration tests.
 - `tests/cli_run/basic.rs`: `run` integration tests for core execution, managed config resolution, and basic failure handling.
 - `tests/cli_run/platform_outputs.rs`: `run` integration tests for Claude/Codex protocol translations and payload validation.
-- `tests/cli_run/retry_state.rs`: `run` integration tests for retry-state isolation, persistence, and translate-time failure tracking.
+- `tests/cli_run/retry_policy.rs`: `run` integration tests for `on_max_retries` policy behavior, including `stop` fallback, `block`, `allow_and_reset`, and invalid stop-only or side-effect-only event combinations.
+- `tests/cli_run/retry_state.rs`: `run` integration tests for retry-state isolation, persistence/reset semantics, and translate-time failure tracking.
 - `tests/cli_run/stop_and_feedback.rs`: `run` integration tests for stop-event summaries and Claude exit-code-two feedback behavior.
 - `examples/platform-overrides.yaml`: Shared-hook example showing Claude/Codex-specific commands, protocol overrides, and disabled platform mappings.
-- `examples/retry-and-env.yaml`: Example config demonstrating merged environment variables, retry overrides, and absolute working directory behavior.
+- `examples/retry-and-env.yaml`: Example config demonstrating merged environment variables, retry-count and `on_max_retries` overrides, and absolute working directory behavior.
 - `examples/stop-hooks.yaml`: Platform-specific stop-event examples for Claude and Codex native stop responses.

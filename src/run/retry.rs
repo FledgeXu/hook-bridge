@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::config::PlatformRule;
+use crate::config::{OnMaxRetriesPolicy, PlatformRule};
 use crate::error::HookBridgeError;
+use crate::platform::capability::{self, DecisionKind};
 use crate::runtime::Runtime;
 use crate::runtime::fs::atomic_write;
 
@@ -21,15 +22,44 @@ pub(crate) fn retry_guard_engaged(rule: &PlatformRule, state: &RetryState) -> bo
     rule.max_retries > 0 && state.consecutive_failures >= rule.max_retries
 }
 
-pub(crate) fn retry_guard_result() -> ExecutionResult {
-    ExecutionResult {
-        status: InternalStatus::Stop,
-        message: Some("max retries reached, skipping command execution".to_string()),
-        system_message: Some("hook_bridge retry guard engaged".to_string()),
-        exit_code: Some(0),
-        raw_stdout: Vec::new(),
-        raw_stderr: Vec::new(),
-        bridge_output: None,
+pub(crate) fn retry_guard_result(rule: &PlatformRule, context: &RuntimeContext) -> ExecutionResult {
+    match rule.on_max_retries {
+        OnMaxRetriesPolicy::Stop => {
+            let status = if capability::allowed_decisions(context.platform, &context.event)
+                .contains(&DecisionKind::Stop)
+            {
+                InternalStatus::Stop
+            } else {
+                InternalStatus::Block
+            };
+            ExecutionResult {
+                status,
+                message: Some("max retries reached, skipping command execution".to_string()),
+                system_message: Some("hook_bridge retry guard engaged".to_string()),
+                exit_code: Some(0),
+                raw_stdout: Vec::new(),
+                raw_stderr: Vec::new(),
+                bridge_output: None,
+            }
+        }
+        OnMaxRetriesPolicy::Block => ExecutionResult {
+            status: InternalStatus::Block,
+            message: Some("max retries reached, skipping command execution".to_string()),
+            system_message: Some("hook_bridge retry guard engaged".to_string()),
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: None,
+        },
+        OnMaxRetriesPolicy::AllowAndReset => ExecutionResult {
+            status: InternalStatus::Success,
+            message: None,
+            system_message: None,
+            exit_code: Some(0),
+            raw_stdout: Vec::new(),
+            raw_stderr: Vec::new(),
+            bridge_output: None,
+        },
     }
 }
 
@@ -38,9 +68,11 @@ pub(crate) fn update_retry_state(
     path: &Path,
     state: &RetryState,
     result: &ExecutionResult,
+    guard_engaged: bool,
 ) -> Result<(), HookBridgeError> {
     match result.status {
         InternalStatus::Success => runtime.fs().remove_file_if_exists(path),
+        InternalStatus::Block if guard_engaged => Ok(()),
         InternalStatus::Block | InternalStatus::Error => persist_failure_state(
             runtime,
             path,

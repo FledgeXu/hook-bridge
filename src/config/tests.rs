@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::error::HookBridgeError;
 use crate::platform::Platform;
 
-use super::parse_and_normalize;
+use super::{OnMaxRetriesPolicy, parse_and_normalize};
 
 fn assert_validation_error_contains(yaml: &str, needle: &str) {
     let message =
@@ -418,6 +418,7 @@ defaults:
   shell: sh
   timeout_sec: 90
   max_retries: 7
+  on_max_retries: stop
   working_dir: /from-default
 hooks:
   - id: r1
@@ -426,6 +427,7 @@ hooks:
     shell: bash
     timeout_sec: 50
     max_retries: 4
+    on_max_retries: block
     working_dir: /from-rule
     platforms:
       codex:
@@ -433,6 +435,7 @@ hooks:
         shell: zsh
         timeout_sec: 10
         max_retries: 2
+        on_max_retries: allow_and_reset
         working_dir: /from-platform
 ";
 
@@ -457,6 +460,10 @@ hooks:
     );
     assert_eq!(rule.claude.as_ref().map(|value| value.max_retries), Some(4));
     assert_eq!(
+        rule.claude.as_ref().map(|value| value.on_max_retries),
+        Some(OnMaxRetriesPolicy::Block)
+    );
+    assert_eq!(
         rule.claude
             .as_ref()
             .and_then(|value| value.working_dir.as_ref()),
@@ -470,11 +477,130 @@ hooks:
     assert_eq!(rule.codex.as_ref().map(|value| value.timeout_sec), Some(10));
     assert_eq!(rule.codex.as_ref().map(|value| value.max_retries), Some(2));
     assert_eq!(
+        rule.codex.as_ref().map(|value| value.on_max_retries),
+        Some(OnMaxRetriesPolicy::AllowAndReset)
+    );
+    assert_eq!(
         rule.codex
             .as_ref()
             .and_then(|value| value.working_dir.as_ref()),
         Some(&PathBuf::from("/from-platform"))
     );
+}
+
+#[test]
+fn on_max_retries_defaults_to_stop_when_omitted() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+";
+
+    let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+    assert!(config_result.is_ok(), "config should parse");
+    let Ok(config) = config_result else {
+        return;
+    };
+    let rule = config.hooks.iter().find(|hook| hook.id == "r1");
+    assert!(rule.is_some(), "rule must exist");
+    let Some(rule_value) = rule else {
+        return;
+    };
+
+    assert_eq!(
+        rule_value.claude.as_ref().map(|value| value.on_max_retries),
+        Some(OnMaxRetriesPolicy::Stop)
+    );
+    assert_eq!(
+        rule_value.codex.as_ref().map(|value| value.on_max_retries),
+        Some(OnMaxRetriesPolicy::Stop)
+    );
+}
+
+#[test]
+fn invalid_on_max_retries_value_is_rejected() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: before_command
+    command: echo ok
+    on_max_retries: later
+";
+
+    let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+    assert_eq!(
+        config_result,
+        Err(HookBridgeError::ConfigValidation {
+            message: "rule 'r1' field 'on_max_retries' must be one of [stop, block, allow_and_reset], got 'later'".to_string(),
+        })
+    );
+}
+
+#[test]
+fn block_on_max_retries_is_rejected_for_stop_only_events() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: TaskCompleted
+    command: echo ok
+    max_retries: 1
+    on_max_retries: block
+    platforms:
+      codex:
+        enabled: false
+";
+
+    let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+    assert_eq!(
+        config_result,
+        Err(HookBridgeError::ConfigValidation {
+            message: "rule 'r1' field 'on_max_retries' value 'block' is not supported for event 'TaskCompleted' on platform 'claude'".to_string(),
+        })
+    );
+}
+
+#[test]
+fn stop_on_max_retries_is_rejected_for_side_effect_only_events_when_retries_enabled() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: Notification
+    command: echo ok
+    max_retries: 1
+    platforms:
+      codex:
+        enabled: false
+";
+
+    let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+    assert_eq!(
+        config_result,
+        Err(HookBridgeError::ConfigValidation {
+            message: "rule 'r1' field 'on_max_retries' value 'stop' is not supported for event 'Notification' on platform 'claude'".to_string(),
+        })
+    );
+}
+
+#[test]
+fn stop_on_max_retries_is_not_validated_when_retries_are_disabled() {
+    let yaml = r"
+version: 1
+hooks:
+  - id: r1
+    event: Notification
+    command: echo ok
+    platforms:
+      codex:
+        enabled: false
+";
+
+    let config_result = parse_and_normalize("cfg.yaml".into(), yaml);
+    assert!(config_result.is_ok(), "config should parse");
 }
 
 #[test]

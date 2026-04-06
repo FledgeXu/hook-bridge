@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::cli::RunArgs;
-use crate::config::PlatformRule;
+use crate::config::{OnMaxRetriesPolicy, PlatformRule};
 use crate::error::HookBridgeError;
 use crate::platform::Platform;
 use crate::runtime::Runtime;
@@ -237,6 +237,7 @@ fn sample_rule() -> PlatformRule {
         shell: "sh".to_string(),
         timeout_sec: 30,
         max_retries: 2,
+        on_max_retries: OnMaxRetriesPolicy::Stop,
         working_dir: Some(PathBuf::from("/rule-cwd")),
         env: BTreeMap::from([
             ("USER_DEFINED".to_string(), "1".to_string()),

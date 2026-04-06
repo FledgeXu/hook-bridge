@@ -22,6 +22,8 @@ pub struct RawDefaults {
     #[serde(default)]
     pub max_retries: Option<u32>,
     #[serde(default)]
+    pub on_max_retries: Option<String>,
+    #[serde(default)]
     pub working_dir: Option<PathBuf>,
 }
 
@@ -42,6 +44,8 @@ pub struct RawHookRule {
     pub timeout_sec: Option<u64>,
     #[serde(default)]
     pub max_retries: Option<u32>,
+    #[serde(default)]
+    pub on_max_retries: Option<String>,
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
     #[serde(default, deserialize_with = "deserialize_env_map")]
@@ -75,6 +79,8 @@ pub struct RawPlatformOverride {
     pub timeout_sec: Option<u64>,
     #[serde(default)]
     pub max_retries: Option<u32>,
+    #[serde(default)]
+    pub on_max_retries: Option<String>,
     #[serde(default)]
     pub working_dir: Option<PathBuf>,
     #[serde(default, deserialize_with = "deserialize_env_map")]
