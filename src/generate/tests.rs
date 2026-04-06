@@ -86,6 +86,10 @@ impl FileSystem for TestFileSystem {
     fn metadata(&self, path: &Path) -> Result<Option<FsMetadata>, HookBridgeError> {
         self.os.metadata(path)
     }
+
+    fn atomic_write_all(&self, path: &Path, content: &[u8]) -> Result<(), HookBridgeError> {
+        self.os.atomic_write_all(path, content)
+    }
 }
 
 struct TestRuntime {

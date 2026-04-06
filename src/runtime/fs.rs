@@ -1,7 +1,10 @@
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::{cell::RefCell, collections::BTreeMap};
+
+use atomic_write_file::AtomicWriteFile;
 
 use crate::error::HookBridgeError;
 
@@ -67,6 +70,13 @@ pub trait FileSystem {
     ///
     /// Returns an error when querying metadata fails for reasons other than missing path.
     fn metadata(&self, path: &Path) -> Result<Option<FsMetadata>, HookBridgeError>;
+
+    /// Atomically writes bytes into a file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be written atomically.
+    fn atomic_write_all(&self, path: &Path, content: &[u8]) -> Result<(), HookBridgeError>;
 }
 
 #[derive(Debug, Default)]
@@ -159,17 +169,24 @@ impl FileSystem for OsFileSystem {
             }),
         }
     }
+
+    fn atomic_write_all(&self, path: &Path, content: &[u8]) -> Result<(), HookBridgeError> {
+        write_through_atomic_write_file(path, content)
+    }
 }
 
 #[derive(Debug, Default)]
 pub struct FakeFileSystem {
-    existing: Vec<PathBuf>,
+    files: RefCell<BTreeMap<PathBuf, Vec<u8>>>,
 }
 
 impl FakeFileSystem {
     #[must_use]
     pub fn with_existing(paths: Vec<PathBuf>) -> Self {
-        Self { existing: paths }
+        let files = paths.into_iter().map(|path| (path, Vec::new())).collect();
+        Self {
+            files: RefCell::new(files),
+        }
     }
 }
 
@@ -179,14 +196,24 @@ impl FileSystem for FakeFileSystem {
     }
 
     fn exists(&self, path: &Path) -> Result<bool, HookBridgeError> {
-        Ok(self.existing.iter().any(|item| item == path))
+        Ok(self.files.borrow().contains_key(path))
     }
 
-    fn read_to_string(&self, _path: &Path) -> Result<String, HookBridgeError> {
-        Ok(String::new())
+    fn read_to_string(&self, path: &Path) -> Result<String, HookBridgeError> {
+        let Some(content) = self.files.borrow().get(path).cloned() else {
+            return Ok(String::new());
+        };
+        String::from_utf8(content).map_err(|_| HookBridgeError::Io {
+            operation: "read_to_string",
+            path: path.to_path_buf(),
+            kind: ErrorKind::InvalidData,
+        })
     }
 
-    fn write_all(&self, _path: &Path, _content: &[u8]) -> Result<(), HookBridgeError> {
+    fn write_all(&self, path: &Path, content: &[u8]) -> Result<(), HookBridgeError> {
+        self.files
+            .borrow_mut()
+            .insert(path.to_path_buf(), content.to_vec());
         Ok(())
     }
 
@@ -194,16 +221,27 @@ impl FileSystem for FakeFileSystem {
         Ok(())
     }
 
-    fn rename(&self, _from: &Path, _to: &Path) -> Result<(), HookBridgeError> {
+    fn rename(&self, from: &Path, to: &Path) -> Result<(), HookBridgeError> {
+        let content = self
+            .files
+            .borrow_mut()
+            .remove(from)
+            .ok_or(HookBridgeError::Io {
+                operation: "rename",
+                path: from.to_path_buf(),
+                kind: ErrorKind::NotFound,
+            })?;
+        self.files.borrow_mut().insert(to.to_path_buf(), content);
         Ok(())
     }
 
-    fn remove_file_if_exists(&self, _path: &Path) -> Result<(), HookBridgeError> {
+    fn remove_file_if_exists(&self, path: &Path) -> Result<(), HookBridgeError> {
+        self.files.borrow_mut().remove(path);
         Ok(())
     }
 
     fn metadata(&self, path: &Path) -> Result<Option<FsMetadata>, HookBridgeError> {
-        if self.existing.iter().any(|item| item == path) {
+        if self.files.borrow().contains_key(path) {
             Ok(Some(FsMetadata {
                 entry_type: FsEntryType::File,
                 readonly: false,
@@ -212,13 +250,17 @@ impl FileSystem for FakeFileSystem {
             Ok(None)
         }
     }
+
+    fn atomic_write_all(&self, path: &Path, content: &[u8]) -> Result<(), HookBridgeError> {
+        atomic_write_via_temp_file(self, path, content)
+    }
 }
 
-/// Atomically writes bytes by writing to a sibling temp file first then renaming.
+/// Atomically writes bytes while ensuring parent directories exist.
 ///
 /// # Errors
 ///
-/// Returns an error if any filesystem operation fails.
+/// Returns an error if path validation, directory creation, or the atomic write fails.
 pub fn atomic_write(
     fs: &dyn FileSystem,
     path: &Path,
@@ -230,7 +272,36 @@ pub fn atomic_write(
             message: format!("path '{}' has no parent directory", path.display()),
         })?;
     fs.create_dir_all(parent)?;
+    fs.atomic_write_all(path, content)
+}
 
+fn write_through_atomic_write_file(path: &Path, content: &[u8]) -> Result<(), HookBridgeError> {
+    let mut file = AtomicWriteFile::options()
+        .open(path)
+        .map_err(|error: std::io::Error| HookBridgeError::Io {
+            operation: "atomic_write::open",
+            path: path.to_path_buf(),
+            kind: error.kind(),
+        })?;
+    file.write_all(content)
+        .map_err(|error: std::io::Error| HookBridgeError::Io {
+            operation: "atomic_write::write",
+            path: path.to_path_buf(),
+            kind: error.kind(),
+        })?;
+    file.commit()
+        .map_err(|error: std::io::Error| HookBridgeError::Io {
+            operation: "atomic_write::commit",
+            path: path.to_path_buf(),
+            kind: error.kind(),
+        })
+}
+
+fn atomic_write_via_temp_file(
+    fs: &dyn FileSystem,
+    path: &Path,
+    content: &[u8],
+) -> Result<(), HookBridgeError> {
     let tmp = unique_tmp_path(path);
     if let Err(error) = fs.write_all(&tmp, content) {
         let _ = fs.remove_file_if_exists(&tmp);
@@ -258,128 +329,19 @@ fn unique_tmp_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::collections::BTreeMap;
     use std::fs;
-    use std::path::PathBuf;
+    use std::io::ErrorKind;
+    use std::path::{Path, PathBuf};
 
-    use super::{FakeFileSystem, FileSystem, FsEntryType, FsMetadata, OsFileSystem, atomic_write};
+    use super::{
+        FakeFileSystem, FileSystem, FsEntryType, FsMetadata, OsFileSystem, atomic_write,
+        unique_tmp_path,
+    };
     use crate::error::HookBridgeError;
 
-    #[derive(Default)]
-    struct TrackingFileSystem {
-        files: RefCell<BTreeMap<PathBuf, Vec<u8>>>,
-        fail_write: bool,
-        fail_rename_suffix: Option<String>,
-    }
-
-    impl TrackingFileSystem {
-        fn failing_write() -> Self {
-            Self {
-                files: RefCell::new(BTreeMap::new()),
-                fail_write: true,
-                fail_rename_suffix: None,
-            }
-        }
-
-        fn failing_rename(suffix: &str, path: PathBuf, content: &[u8]) -> Self {
-            let mut files = BTreeMap::new();
-            files.insert(path, content.to_vec());
-            Self {
-                files: RefCell::new(files),
-                fail_write: false,
-                fail_rename_suffix: Some(suffix.to_string()),
-            }
-        }
-    }
-
-    impl FileSystem for TrackingFileSystem {
-        fn current_dir(&self) -> Result<PathBuf, HookBridgeError> {
-            Ok(PathBuf::from("/tmp/hook-bridge-tracking-fs"))
-        }
-
-        fn exists(&self, path: &std::path::Path) -> Result<bool, HookBridgeError> {
-            Ok(self.files.borrow().contains_key(path))
-        }
-
-        fn read_to_string(&self, path: &std::path::Path) -> Result<String, HookBridgeError> {
-            let files = self.files.borrow();
-            let content = files.get(path).ok_or_else(|| HookBridgeError::Io {
-                operation: "read_to_string",
-                path: path.to_path_buf(),
-                kind: std::io::ErrorKind::NotFound,
-            })?;
-            String::from_utf8(content.clone()).map_err(|_| HookBridgeError::Io {
-                operation: "read_to_string",
-                path: path.to_path_buf(),
-                kind: std::io::ErrorKind::InvalidData,
-            })
-        }
-
-        fn write_all(&self, path: &std::path::Path, content: &[u8]) -> Result<(), HookBridgeError> {
-            if self.fail_write {
-                self.files
-                    .borrow_mut()
-                    .insert(path.to_path_buf(), b"{broken".to_vec());
-                return Err(HookBridgeError::Io {
-                    operation: "write",
-                    path: path.to_path_buf(),
-                    kind: std::io::ErrorKind::PermissionDenied,
-                });
-            }
-
-            self.files
-                .borrow_mut()
-                .insert(path.to_path_buf(), content.to_vec());
-            Ok(())
-        }
-
-        fn create_dir_all(&self, _path: &std::path::Path) -> Result<(), HookBridgeError> {
-            Ok(())
-        }
-
-        fn rename(
-            &self,
-            from: &std::path::Path,
-            to: &std::path::Path,
-        ) -> Result<(), HookBridgeError> {
-            if self
-                .fail_rename_suffix
-                .as_ref()
-                .is_some_and(|suffix| to.to_string_lossy().contains(suffix))
-            {
-                return Err(HookBridgeError::Io {
-                    operation: "rename",
-                    path: from.to_path_buf(),
-                    kind: std::io::ErrorKind::PermissionDenied,
-                });
-            }
-
-            let mut files = self.files.borrow_mut();
-            let content = files.remove(from).ok_or_else(|| HookBridgeError::Io {
-                operation: "rename",
-                path: from.to_path_buf(),
-                kind: std::io::ErrorKind::NotFound,
-            })?;
-            files.insert(to.to_path_buf(), content);
-            Ok(())
-        }
-
-        fn remove_file_if_exists(&self, path: &std::path::Path) -> Result<(), HookBridgeError> {
-            self.files.borrow_mut().remove(path);
-            Ok(())
-        }
-
-        fn metadata(&self, path: &std::path::Path) -> Result<Option<FsMetadata>, HookBridgeError> {
-            if self.files.borrow().contains_key(path) {
-                Ok(Some(FsMetadata {
-                    entry_type: FsEntryType::File,
-                    readonly: false,
-                }))
-            } else {
-                Ok(None)
-            }
-        }
+    #[allow(clippy::expect_used, reason = "test fixture setup should fail fast")]
+    fn tempdir() -> tempfile::TempDir {
+        tempfile::tempdir().expect("tempdir creation should succeed")
     }
 
     #[test]
@@ -408,11 +370,7 @@ mod tests {
 
     #[test]
     fn os_filesystem_round_trips_file_operations() {
-        let temp_result = tempfile::tempdir();
-        assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+        let temp = tempdir();
         let fs = OsFileSystem;
         let dir = temp.path().join("nested");
         let original = dir.join("one.txt");
@@ -439,11 +397,7 @@ mod tests {
 
     #[test]
     fn atomic_write_persists_content() {
-        let temp_result = tempfile::tempdir();
-        assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+        let temp = tempdir();
         let fs = OsFileSystem;
         let path = temp.path().join("hooks.json");
 
@@ -452,9 +406,20 @@ mod tests {
     }
 
     #[test]
+    fn atomic_write_overwrites_existing_file() {
+        let temp = tempdir();
+        let fs = OsFileSystem;
+        let path = temp.path().join("hooks.json");
+        assert!(fs::write(&path, b"old").is_ok());
+
+        assert_eq!(atomic_write(&fs, &path, b"new"), Ok(()));
+        assert_eq!(fs.read_to_string(&path), Ok("new".to_string()));
+    }
+
+    #[test]
     fn atomic_write_rejects_path_without_parent() {
         assert_eq!(
-            atomic_write(&FakeFileSystem::default(), std::path::Path::new("/"), b"{}"),
+            atomic_write(&FakeFileSystem::default(), Path::new("/"), b"{}"),
             Err(HookBridgeError::ConfigValidation {
                 message: "path '/' has no parent directory".to_string(),
             })
@@ -462,51 +427,50 @@ mod tests {
     }
 
     #[test]
-    fn atomic_write_removes_temp_file_after_write_failure() {
-        let fs = TrackingFileSystem::failing_write();
-        let target = PathBuf::from("/tmp/hooks.json");
+    fn atomic_write_uses_fake_filesystem_atomic_path() {
+        let fs = FakeFileSystem::default();
+        let target = Path::new("/tmp/hooks.json");
 
-        let result = atomic_write(&fs, &target, br#"{"ok":true}"#);
-
-        assert!(matches!(
-            result,
-            Err(HookBridgeError::Io {
-                operation: "write",
-                ..
-            })
-        ));
-        assert_eq!(fs.files.borrow().len(), 0);
+        assert_eq!(atomic_write(&fs, target, br#"{"ok":true}"#), Ok(()));
+        assert_eq!(fs.read_to_string(target), Ok(r#"{"ok":true}"#.to_string()));
     }
 
     #[test]
-    fn atomic_write_preserves_original_target_after_rename_failure() {
-        let target = PathBuf::from("/tmp/hooks.json");
-        let fs =
-            TrackingFileSystem::failing_rename("hooks.json", target.clone(), br#"{"old":true}"#);
+    fn unique_tmp_path_stays_in_parent_and_uses_hook_bridge_extension() {
+        let target = Path::new("/tmp/hooks.json");
+        let tmp = unique_tmp_path(target);
 
-        let result = atomic_write(&fs, &target, br#"{"new":true}"#);
+        assert_eq!(tmp.parent(), target.parent());
+        assert_ne!(tmp, PathBuf::new());
+        assert!(
+            tmp.file_name()
+                .is_some_and(|name| name.to_string_lossy().contains(".tmp.hook_bridge."))
+        );
+    }
+
+    #[test]
+    fn os_filesystem_remove_file_surfaces_non_not_found_errors() {
+        let temp = tempdir();
+        let fs = OsFileSystem;
+        let directory = temp.path().join("dir");
+        let mkdir_result = fs_err::create_dir_all(&directory);
+        assert!(
+            mkdir_result.is_ok(),
+            "fixture directory should be creatable"
+        );
 
         assert!(matches!(
-            result,
+            fs.remove_file_if_exists(&directory),
             Err(HookBridgeError::Io {
-                operation: "rename",
+                operation: "remove_file",
                 ..
             })
         ));
-        assert_eq!(
-            fs.files.borrow().get(&target),
-            Some(&br#"{"old":true}"#.to_vec())
-        );
-        assert_eq!(fs.files.borrow().len(), 1);
     }
 
     #[test]
     fn os_filesystem_surfaces_io_errors() {
-        let temp_result = tempfile::tempdir();
-        assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+        let temp = tempdir();
         let fs = OsFileSystem;
         let missing = temp.path().join("missing.txt");
         let invalid_parent = missing.join("child.txt");
@@ -554,54 +518,37 @@ mod tests {
     }
 
     #[test]
-    fn os_filesystem_remove_file_surfaces_non_not_found_errors() {
-        let temp_result = tempfile::tempdir();
-        assert!(temp_result.is_ok(), "tempdir creation should succeed");
-        let Ok(temp) = temp_result else {
-            return;
-        };
+    fn os_filesystem_read_to_string_surfaces_invalid_data() {
+        let temp = tempdir();
         let fs = OsFileSystem;
-        let directory = temp.path().join("dir");
-        let mkdir_result = fs_err::create_dir_all(&directory);
+        let path = temp.path().join("binary.bin");
         assert!(
-            mkdir_result.is_ok(),
-            "fixture directory should be creatable"
+            fs::write(&path, [0xff]).is_ok(),
+            "fixture file should be writable"
         );
 
         assert!(matches!(
-            fs.remove_file_if_exists(&directory),
+            fs.read_to_string(&path),
             Err(HookBridgeError::Io {
-                operation: "remove_file",
+                operation: "read_to_string",
+                kind: ErrorKind::InvalidData,
                 ..
             })
         ));
     }
 
     #[test]
-    fn tracking_filesystem_surfaces_invalid_utf8_and_missing_rename_source() {
-        let path = PathBuf::from("/tmp/binary.txt");
-        let fs = TrackingFileSystem {
-            files: RefCell::new(BTreeMap::from([(path.clone(), vec![0xff])])),
-            fail_write: false,
-            fail_rename_suffix: None,
-        };
+    fn os_filesystem_rename_missing_source_surfaces_not_found() {
+        let temp = tempdir();
+        let fs = OsFileSystem;
+        let from = temp.path().join("missing.txt");
+        let to = temp.path().join("renamed.txt");
 
         assert!(matches!(
-            fs.read_to_string(&path),
-            Err(HookBridgeError::Io {
-                operation: "read_to_string",
-                kind: std::io::ErrorKind::InvalidData,
-                ..
-            })
-        ));
-        assert!(matches!(
-            fs.rename(
-                PathBuf::from("/tmp/missing").as_path(),
-                PathBuf::from("/tmp/out").as_path()
-            ),
+            fs.rename(&from, &to),
             Err(HookBridgeError::Io {
                 operation: "rename",
-                kind: std::io::ErrorKind::NotFound,
+                kind: ErrorKind::NotFound,
                 ..
             })
         ));
