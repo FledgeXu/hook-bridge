@@ -7,16 +7,19 @@ use crate::error::HookBridgeError;
 use crate::platform::Platform;
 use crate::runtime::Runtime;
 use crate::runtime::clock::{Clock, FixedClock};
-use crate::runtime::fs::{FileSystem, OsFileSystem};
+use crate::runtime::fs::{FileSystem, FsMetadata, OsFileSystem};
 use crate::runtime::io::{FakeIo, Io};
 use crate::runtime::process::{FakeProcessRunner, ProcessRunner};
 
 use super::build::{collect_platform_hooks, native_event_name};
 use super::managed::ensure_no_unmanaged_conflict;
 use super::{
-    CLAUDE_TARGET, CODEX_TARGET, GenerateArgs, MANAGED_BY, MANAGED_VERSION, ManagedMetadata,
-    build_generation_input, build_run_command, ensure_generation_targets_are_writable, execute,
-    is_managed_content, load_metadata, normalize_path, target_path,
+    CLAUDE_TARGET, CODEX_TARGET, DialoguerForceOverwriteConfirmer, ForceOverwriteConfirmer,
+    GenerateArgs, MANAGED_BY, MANAGED_VERSION, ManagedMetadata, build_generation_input,
+    build_run_command, ensure_existing_force_target_is_replaceable,
+    ensure_force_target_parent_is_writable, ensure_generation_targets_are_writable, execute,
+    execute_with_confirmer_and_interactivity, format_force_overwrite_targets,
+    is_force_overwrite_interactive, is_managed_content, load_metadata, normalize_path, target_path,
 };
 
 struct CurrentDirGuard {
@@ -78,6 +81,10 @@ impl FileSystem for TestFileSystem {
 
     fn remove_file_if_exists(&self, path: &Path) -> Result<(), HookBridgeError> {
         self.os.remove_file_if_exists(path)
+    }
+
+    fn metadata(&self, path: &Path) -> Result<Option<FsMetadata>, HookBridgeError> {
+        self.os.metadata(path)
     }
 }
 

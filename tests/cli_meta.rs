@@ -82,6 +82,38 @@ fn generate_parses_optional_platform_argument() {
 }
 
 #[test]
+fn generate_parses_force_and_yes_flags() {
+    let parse_result = Cli::try_parse_from(["hook_bridge", "generate", "--force", "--yes"]);
+    assert!(parse_result.is_ok(), "generate should parse --force --yes");
+    let Ok(cli) = parse_result else {
+        return;
+    };
+
+    let CliCommand::Generate(args) = cli.command else {
+        return;
+    };
+    assert!(args.force);
+    assert!(args.yes);
+}
+
+#[test]
+fn generate_parses_yes_without_force() {
+    let parse_result = Cli::try_parse_from(["hook_bridge", "generate", "--yes"]);
+    assert!(
+        parse_result.is_err(),
+        "generate should reject --yes without --force"
+    );
+    let Err(error) = parse_result else {
+        return;
+    };
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
+    assert!(error.to_string().contains("--force"));
+}
+
+#[test]
 fn generate_rejects_invalid_platform_argument() -> Result<(), Box<dyn std::error::Error>> {
     let mut command = Command::cargo_bin("hook_bridge")?;
 

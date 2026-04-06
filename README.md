@@ -33,6 +33,8 @@ hook_bridge generate
 hook_bridge generate --config ./hook-bridge.yaml
 hook_bridge generate --config ./hook-bridge.yaml --platform claude
 hook_bridge generate --config ./hook-bridge.yaml --platform codex
+hook_bridge generate --force
+hook_bridge generate --force --yes
 ```
 
 Run a generated rule handler:
@@ -300,9 +302,15 @@ If your command exits non-zero and does not emit a valid structured result, `hoo
 
 ## Managed File Safety
 
-`generate` only overwrites files already managed by `hook_bridge`.
+By default, `generate` only overwrites files already managed by `hook_bridge`.
 
 If either target file already exists without `_hook_bridge.managed_by = "hook_bridge"`, generation fails with a conflict and does not partially update the other platform file.
+
+Use `--force` to allow overwriting non-managed target files.
+
+- Interactive terminal (`stdin` and `stderr` are TTY): `--force` asks for a single confirmation (`Proceed with force overwrite?`), default is deny.
+- Non-interactive environment: `--force` must be paired with `--yes` or generation fails with a parameter error.
+- `--yes` is only valid together with `--force`.
 
 ## Example Configs
 

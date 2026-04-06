@@ -30,6 +30,12 @@ pub struct GenerateArgs {
 
     #[arg(long)]
     pub platform: Option<Platform>,
+
+    #[arg(long)]
+    pub force: bool,
+
+    #[arg(long, requires = "force")]
+    pub yes: bool,
 }
 
 #[derive(Debug, clap::Args)]

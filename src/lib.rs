@@ -1,3 +1,8 @@
+#![allow(
+    clippy::multiple_crate_versions,
+    reason = "transitive dependencies currently require multiple hashbrown versions"
+)]
+
 pub mod app;
 pub mod cli;
 pub mod config;
@@ -325,6 +330,8 @@ mod tests {
             command: crate::cli::Command::Generate(crate::cli::GenerateArgs {
                 config: "missing.yaml".into(),
                 platform: None,
+                force: false,
+                yes: false,
             }),
         };
 

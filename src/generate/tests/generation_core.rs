@@ -247,6 +247,8 @@ hooks:
     let args = GenerateArgs {
         config: PathBuf::from("hook-bridge.yaml"),
         platform: None,
+        force: false,
+        yes: false,
     };
     let runtime = crate::runtime::RealRuntime::default();
 
@@ -347,6 +349,26 @@ fn normalize_config_path_joins_relative_paths_from_runtime_current_directory() {
         normalize_path(Path::new("hook-bridge.yaml"), &runtime_cwd),
         PathBuf::from("/tmp/runtime-cwd").join("hook-bridge.yaml")
     );
+}
+
+#[test]
+fn force_overwrite_interactive_requires_both_stdin_and_stderr_tty() {
+    assert!(!is_force_overwrite_interactive(false, false));
+    assert!(!is_force_overwrite_interactive(true, false));
+    assert!(!is_force_overwrite_interactive(false, true));
+    assert!(is_force_overwrite_interactive(true, true));
+}
+
+#[test]
+fn force_overwrite_target_message_lists_all_targets() {
+    let message = format_force_overwrite_targets(&[
+        PathBuf::from("/tmp/force-a.json"),
+        PathBuf::from("/tmp/force-b.json"),
+    ]);
+
+    assert!(message.starts_with("Force overwrite will replace these target files:\n"));
+    assert!(message.contains("  - /tmp/force-a.json\n"));
+    assert!(message.contains("  - /tmp/force-b.json\n"));
 }
 
 #[test]

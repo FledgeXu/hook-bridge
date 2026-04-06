@@ -1,3 +1,8 @@
+#![allow(
+    clippy::multiple_crate_versions,
+    reason = "transitive dependencies currently require multiple hashbrown versions"
+)]
+
 use std::process::ExitCode;
 
 fn main() -> ExitCode {

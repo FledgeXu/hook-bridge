@@ -116,6 +116,71 @@ fn generate_command_rejects_non_managed_target_files() {
 }
 
 #[test]
+fn generate_command_force_without_yes_fails_in_non_interactive_environment() {
+    let temp = temp_dir();
+    write_basic_config(&temp);
+    std::fs::create_dir_all(temp.path().join(".codex")).unwrap_or_else(|_| unreachable!());
+    write_file(temp.path().join(".codex/hooks.json"), "{}");
+
+    cargo_bin()
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--force")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "--force requires --yes in non-interactive environments",
+        ));
+}
+
+#[test]
+fn generate_command_force_yes_overwrites_non_managed_target_files() {
+    let temp = temp_dir();
+    write_basic_config(&temp);
+    std::fs::create_dir_all(temp.path().join(".codex")).unwrap_or_else(|_| unreachable!());
+    write_file(temp.path().join(".codex/hooks.json"), "{}");
+
+    cargo_bin()
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--platform")
+        .arg("codex")
+        .arg("--force")
+        .arg("--yes")
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(temp.path().join(".codex/hooks.json"))
+        .unwrap_or_else(|_| unreachable!());
+    assert!(content.contains("\"managed_by\": \"hook_bridge\""));
+    assert!(content.contains("hook_bridge run --platform codex --rule-id r1"));
+}
+
+#[test]
+fn generate_command_force_yes_rejects_directory_target_without_partial_output() {
+    let temp = temp_dir();
+    write_basic_config(&temp);
+    std::fs::create_dir_all(temp.path().join(".codex/hooks.json"))
+        .unwrap_or_else(|_| unreachable!());
+
+    cargo_bin()
+        .current_dir(temp.path())
+        .arg("generate")
+        .arg("--force")
+        .arg("--yes")
+        .assert()
+        .failure()
+        .code(4)
+        .stderr(predicate::str::contains("file conflict"));
+
+    assert!(!temp.path().join(".claude/settings.json").exists());
+    assert!(temp.path().join(".codex/hooks.json").is_dir());
+}
+
+#[test]
 fn generate_command_overwrites_managed_target_files() {
     let temp = temp_dir();
     write_basic_config(&temp);

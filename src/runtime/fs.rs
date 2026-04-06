@@ -5,6 +5,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::error::HookBridgeError;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FsEntryType {
+    File,
+    Directory,
+    Other,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FsMetadata {
+    pub entry_type: FsEntryType,
+    pub readonly: bool,
+}
+
 pub trait FileSystem {
     /// Returns the absolute current working directory used for relative path resolution.
     ///
@@ -48,6 +61,12 @@ pub trait FileSystem {
     ///
     /// Returns an error when deletion fails for reasons other than missing file.
     fn remove_file_if_exists(&self, path: &Path) -> Result<(), HookBridgeError>;
+    /// Returns metadata for a path without following symlinks.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when querying metadata fails for reasons other than missing path.
+    fn metadata(&self, path: &Path) -> Result<Option<FsMetadata>, HookBridgeError>;
 }
 
 #[derive(Debug, Default)]
@@ -115,6 +134,31 @@ impl FileSystem for OsFileSystem {
             }),
         }
     }
+
+    fn metadata(&self, path: &Path) -> Result<Option<FsMetadata>, HookBridgeError> {
+        match fs_err::symlink_metadata(path) {
+            Ok(metadata) => {
+                let file_type = metadata.file_type();
+                let entry_type = if file_type.is_file() {
+                    FsEntryType::File
+                } else if file_type.is_dir() {
+                    FsEntryType::Directory
+                } else {
+                    FsEntryType::Other
+                };
+                Ok(Some(FsMetadata {
+                    entry_type,
+                    readonly: metadata.permissions().readonly(),
+                }))
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(HookBridgeError::Io {
+                operation: "metadata",
+                path: path.to_path_buf(),
+                kind: error.kind(),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -156,6 +200,17 @@ impl FileSystem for FakeFileSystem {
 
     fn remove_file_if_exists(&self, _path: &Path) -> Result<(), HookBridgeError> {
         Ok(())
+    }
+
+    fn metadata(&self, path: &Path) -> Result<Option<FsMetadata>, HookBridgeError> {
+        if self.existing.iter().any(|item| item == path) {
+            Ok(Some(FsMetadata {
+                entry_type: FsEntryType::File,
+                readonly: false,
+            }))
+        } else {
+            Ok(None)
+        }
     }
 }
 
@@ -208,7 +263,7 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    use super::{FakeFileSystem, FileSystem, OsFileSystem, atomic_write};
+    use super::{FakeFileSystem, FileSystem, FsEntryType, FsMetadata, OsFileSystem, atomic_write};
     use crate::error::HookBridgeError;
 
     #[derive(Default)]
@@ -314,6 +369,17 @@ mod tests {
             self.files.borrow_mut().remove(path);
             Ok(())
         }
+
+        fn metadata(&self, path: &std::path::Path) -> Result<Option<FsMetadata>, HookBridgeError> {
+            if self.files.borrow().contains_key(path) {
+                Ok(Some(FsMetadata {
+                    entry_type: FsEntryType::File,
+                    readonly: false,
+                }))
+            } else {
+                Ok(None)
+            }
+        }
     }
 
     #[test]
@@ -337,6 +403,7 @@ mod tests {
         assert_eq!(fs.create_dir_all(&path), Ok(()));
         assert_eq!(fs.rename(&path, &path), Ok(()));
         assert_eq!(fs.remove_file_if_exists(&path), Ok(()));
+        assert_eq!(fs.metadata(&path), Ok(None));
     }
 
     #[test]
@@ -355,11 +422,19 @@ mod tests {
         assert_eq!(fs.create_dir_all(&dir), Ok(()));
         assert_eq!(fs.write_all(&original, b"hello"), Ok(()));
         assert_eq!(fs.exists(&original), Ok(true));
+        assert_eq!(
+            fs.metadata(&original),
+            Ok(Some(FsMetadata {
+                entry_type: FsEntryType::File,
+                readonly: false,
+            }))
+        );
         assert_eq!(fs.read_to_string(&original), Ok("hello".to_string()));
         assert_eq!(fs.rename(&original, &renamed), Ok(()));
         assert_eq!(fs.read_to_string(&renamed), Ok("hello".to_string()));
         assert_eq!(fs.remove_file_if_exists(&renamed), Ok(()));
         assert_eq!(fs.exists(&renamed), Ok(false));
+        assert_eq!(fs.metadata(&renamed), Ok(None));
     }
 
     #[test]

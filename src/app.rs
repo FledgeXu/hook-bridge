@@ -85,6 +85,8 @@ mod tests {
             command: Command::Generate(GenerateArgs {
                 config: "hook-bridge.yaml".into(),
                 platform: None,
+                force: false,
+                yes: false,
             }),
         };
 
