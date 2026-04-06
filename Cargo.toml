@@ -12,6 +12,7 @@ repository = "https://github.com/FledgeXu/hook-bridge"
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
+dialoguer = "0.12.0"
 fs-err = "3.3.0"
 hex = "0.4.3"
 serde = { version = "1.0.228", features = ["derive"] }
