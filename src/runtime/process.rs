@@ -141,15 +141,16 @@ fn collect_pipe_reader(
     reader: Option<JoinHandle<Result<Vec<u8>, HookBridgeError>>>,
     stream_name: &'static str,
 ) -> Result<Vec<u8>, HookBridgeError> {
-    match reader {
-        Some(handle) => match handle.join() {
-            Ok(result) => result,
-            Err(_) => Err(HookBridgeError::Process {
-                message: format!("child {stream_name} reader thread panicked"),
-            }),
+    reader.map_or_else(
+        || Ok(Vec::new()),
+        |handle| {
+            handle.join().unwrap_or_else(|_| {
+                Err(HookBridgeError::Process {
+                    message: format!("child {stream_name} reader thread panicked"),
+                })
+            })
         },
-        None => Ok(Vec::new()),
-    }
+    )
 }
 
 fn cleanup_child(
@@ -173,7 +174,7 @@ pub struct FakeProcessRunner {
 
 impl FakeProcessRunner {
     #[must_use]
-    pub fn success(status_code: i32) -> Self {
+    pub const fn success(status_code: i32) -> Self {
         Self { status_code }
     }
 }

@@ -259,7 +259,7 @@ pub fn event_capability(platform: Platform, event: &str) -> Option<&'static Even
 }
 
 #[must_use]
-pub fn events(platform: Platform) -> &'static [&'static str] {
+pub const fn events(platform: Platform) -> &'static [&'static str] {
     match platform {
         Platform::Claude => &[
             "SessionStart",
@@ -310,7 +310,7 @@ pub fn event_supports_matcher(platform: Platform, event: &str) -> bool {
 }
 
 #[must_use]
-pub fn timeout_field_name(platform: Platform) -> &'static str {
+pub const fn timeout_field_name(platform: Platform) -> &'static str {
     matrix(platform).timeout_field
 }
 

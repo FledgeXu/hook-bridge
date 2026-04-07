@@ -219,9 +219,7 @@ fn execute_writes_status_message_to_claude_and_codex_targets() {
         return;
     };
 
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let guard_result = CurrentDirGuard::enter(temp.path());

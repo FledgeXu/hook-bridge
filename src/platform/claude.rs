@@ -269,7 +269,7 @@ fn permission_request_exit_two_output(
     )?))
 }
 
-fn empty_output() -> PlatformOutput {
+const fn empty_output() -> PlatformOutput {
     PlatformOutput {
         stdout: Vec::new(),
         stderr: Vec::new(),

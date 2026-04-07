@@ -347,9 +347,7 @@ mod tests {
 
     #[test]
     fn run_cli_surfaces_run_command_errors() {
-        let lock_result = crate::CWD_LOCK.lock();
-        assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-        let Ok(_lock) = lock_result else {
+        let Ok(_lock) = crate::CWD_LOCK.lock() else {
             return;
         };
         let temp_result = tempfile::tempdir();

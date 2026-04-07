@@ -1,5 +1,5 @@
 mod context;
-mod retry;
+pub(crate) mod retry;
 
 use std::time::Duration;
 

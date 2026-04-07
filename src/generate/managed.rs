@@ -32,7 +32,7 @@ pub fn ensure_generation_targets_are_writable(
     Ok(())
 }
 
-pub(crate) fn ensure_no_unmanaged_conflict(
+pub(super) fn ensure_no_unmanaged_conflict(
     runtime: &dyn Runtime,
     target: &Path,
 ) -> Result<(), HookBridgeError> {

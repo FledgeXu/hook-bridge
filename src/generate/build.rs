@@ -56,7 +56,7 @@ pub fn build_generation_input(normalized: &NormalizedConfig) -> PlatformGenerati
     PlatformGenerationInput { rules }
 }
 
-pub(crate) fn collect_platform_hooks(
+pub(super) fn collect_platform_hooks(
     generation: &PlatformGenerationInput,
     platform: Platform,
 ) -> BTreeMap<String, Vec<serde_json::Value>> {
@@ -130,6 +130,6 @@ pub fn build_run_command(platform: Platform, rule_id: &str) -> String {
 }
 
 #[cfg(test)]
-pub(crate) fn native_event_name(event: &str) -> &str {
+pub(super) const fn native_event_name(event: &str) -> &str {
     event
 }

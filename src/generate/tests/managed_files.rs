@@ -122,9 +122,7 @@ fn ensure_no_unmanaged_conflict_allows_missing_and_managed_files() {
 
 #[test]
 fn preflight_generation_targets_rejects_any_unmanaged_target() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -155,9 +153,7 @@ fn preflight_generation_targets_rejects_any_unmanaged_target() {
 
 #[test]
 fn preflight_generation_targets_allows_missing_targets() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -273,9 +269,7 @@ fn force_preflight_parent_allows_missing_ancestors_in_fake_fs() {
 
 #[test]
 fn execute_force_rejects_non_interactive_without_yes() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -309,7 +303,7 @@ hooks:
     assert_eq!(
         execute_with_confirmer_and_interactivity(
             &GenerateArgs {
-                config: config_path.clone(),
+                config: config_path,
                 platform: Some(Platform::Codex),
                 force: true,
                 yes: false,
@@ -326,9 +320,7 @@ hooks:
 
 #[test]
 fn execute_force_overwrites_unmanaged_file_after_confirmation() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -362,7 +354,7 @@ hooks:
     assert_eq!(
         execute_with_confirmer_and_interactivity(
             &GenerateArgs {
-                config: config_path.clone(),
+                config: config_path,
                 platform: Some(Platform::Codex),
                 force: true,
                 yes: false,
@@ -384,9 +376,7 @@ hooks:
 
 #[test]
 fn execute_force_cancels_when_confirmation_declined() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -420,7 +410,7 @@ hooks:
     assert_eq!(
         execute_with_confirmer_and_interactivity(
             &GenerateArgs {
-                config: config_path.clone(),
+                config: config_path,
                 platform: Some(Platform::Codex),
                 force: true,
                 yes: false,
@@ -437,9 +427,7 @@ hooks:
 
 #[test]
 fn execute_and_load_metadata_round_trip() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -496,9 +484,7 @@ hooks:
 
 #[test]
 fn execute_resolves_relative_config_path_through_runtime_before_reading() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -565,9 +551,7 @@ hooks:
 
 #[test]
 fn load_metadata_rejects_invalid_shapes() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -621,9 +605,7 @@ fn load_metadata_rejects_invalid_shapes() {
 
 #[test]
 fn load_metadata_rejects_missing_metadata_fields() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();

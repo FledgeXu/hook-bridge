@@ -135,7 +135,7 @@ fn maybe_confirm_force_overwrite(
     })
 }
 
-fn is_force_overwrite_interactive(stdin_terminal: bool, stderr_terminal: bool) -> bool {
+const fn is_force_overwrite_interactive(stdin_terminal: bool, stderr_terminal: bool) -> bool {
     stdin_terminal && stderr_terminal
 }
 

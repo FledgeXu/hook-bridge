@@ -69,7 +69,7 @@ struct FailingAtomicFileSystem {
 }
 
 impl FailingAtomicFileSystem {
-    fn new(failure: AtomicWriteFailure) -> Self {
+    const fn new(failure: AtomicWriteFailure) -> Self {
         Self {
             os: OsFileSystem,
             failure,

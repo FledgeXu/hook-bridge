@@ -226,7 +226,7 @@ impl FileSystem for FakeFileSystem {
             .files
             .borrow_mut()
             .remove(from)
-            .ok_or(HookBridgeError::Io {
+            .ok_or_else(|| HookBridgeError::Io {
                 operation: "rename",
                 path: from.to_path_buf(),
                 kind: ErrorKind::NotFound,

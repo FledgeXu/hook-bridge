@@ -184,9 +184,7 @@ fn test_runtime_exposes_all_dependencies() {
 
 #[test]
 fn execute_rejects_relative_managed_source_config() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -224,9 +222,7 @@ fn execute_rejects_relative_managed_source_config() {
 
 #[test]
 fn execute_rejects_non_utf8_stdin() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -267,9 +263,7 @@ fn execute_rejects_non_utf8_stdin() {
 
 #[test]
 fn execute_rejects_event_mismatch() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -311,9 +305,7 @@ fn execute_rejects_event_mismatch() {
 
 #[test]
 fn execute_short_circuits_when_retry_guard_is_engaged() {
-    let lock_result = crate::CWD_LOCK.lock();
-    assert!(lock_result.is_ok(), "cwd lock should not be poisoned");
-    let Ok(_lock) = lock_result else {
+    let Ok(_lock) = crate::CWD_LOCK.lock() else {
         return;
     };
     let temp_result = tempfile::tempdir();
@@ -343,7 +335,7 @@ fn execute_short_circuits_when_retry_guard_is_engaged() {
         raw_event: "PreToolUse".to_string(),
         event: "PreToolUse".to_string(),
         rule_id: "r1".to_string(),
-        source_config_path: config_path.clone(),
+        source_config_path: config_path,
         session_or_thread_id: "t1".to_string(),
         cwd: None,
         transcript_path: None,

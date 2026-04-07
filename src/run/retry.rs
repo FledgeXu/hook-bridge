@@ -12,17 +12,17 @@ use crate::runtime::fs::atomic_write;
 use super::{ExecutionResult, InternalStatus, RuntimeContext};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct RetryState {
+pub struct RetryState {
     pub(crate) consecutive_failures: u32,
     pub(crate) last_error: String,
     pub(crate) last_failure_epoch_sec: u64,
 }
 
-pub(crate) fn retry_guard_engaged(rule: &PlatformRule, state: &RetryState) -> bool {
+pub const fn retry_guard_engaged(rule: &PlatformRule, state: &RetryState) -> bool {
     rule.max_retries > 0 && state.consecutive_failures >= rule.max_retries
 }
 
-pub(crate) fn retry_guard_result(rule: &PlatformRule, context: &RuntimeContext) -> ExecutionResult {
+pub fn retry_guard_result(rule: &PlatformRule, context: &RuntimeContext) -> ExecutionResult {
     match rule.on_max_retries {
         OnMaxRetriesPolicy::Stop => {
             let status = if capability::allowed_decisions(context.platform, &context.event)
@@ -63,7 +63,7 @@ pub(crate) fn retry_guard_result(rule: &PlatformRule, context: &RuntimeContext) 
     }
 }
 
-pub(crate) fn update_retry_state(
+pub fn update_retry_state(
     runtime: &dyn Runtime,
     path: &Path,
     state: &RetryState,
@@ -86,7 +86,7 @@ pub(crate) fn update_retry_state(
     }
 }
 
-pub(crate) fn now_epoch_sec(runtime: &dyn Runtime) -> Result<u64, HookBridgeError> {
+pub fn now_epoch_sec(runtime: &dyn Runtime) -> Result<u64, HookBridgeError> {
     runtime
         .clock()
         .now()
@@ -101,7 +101,7 @@ fn retry_state_root(runtime: &dyn Runtime) -> PathBuf {
     runtime.temp_dir().join("hook_bridge").join("retries")
 }
 
-pub(crate) fn retry_state_path(runtime: &dyn Runtime, context: &RuntimeContext) -> PathBuf {
+pub fn retry_state_path(runtime: &dyn Runtime, context: &RuntimeContext) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(context.source_config_path.to_string_lossy().as_bytes());
     hasher.update(context.session_or_thread_id.as_bytes());
@@ -113,10 +113,7 @@ pub(crate) fn retry_state_path(runtime: &dyn Runtime, context: &RuntimeContext) 
         .join(format!("{}.json", context.rule_id))
 }
 
-pub(crate) fn load_retry_state(
-    runtime: &dyn Runtime,
-    path: &Path,
-) -> Result<RetryState, HookBridgeError> {
+pub fn load_retry_state(runtime: &dyn Runtime, path: &Path) -> Result<RetryState, HookBridgeError> {
     if !runtime.fs().exists(path)? {
         return Ok(RetryState {
             consecutive_failures: 0,
@@ -131,7 +128,7 @@ pub(crate) fn load_retry_state(
     })
 }
 
-pub(crate) fn persist_retry_state(
+pub fn persist_retry_state(
     runtime: &dyn Runtime,
     path: &Path,
     state: &RetryState,
