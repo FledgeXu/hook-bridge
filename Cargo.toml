@@ -31,6 +31,7 @@ perf = "deny"
 style = "deny"
 pedantic = "deny"
 cargo = "deny"
+nursery = "deny"
 
 # restriction
 dbg_macro = "deny"
